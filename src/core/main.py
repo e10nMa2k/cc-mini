@@ -7,6 +7,7 @@ import re
 import sys
 import time
 import threading
+from datetime import datetime
 from pathlib import Path
 
 from prompt_toolkit import PromptSession
@@ -34,6 +35,16 @@ from .tools.file_read import FileReadTool
 from .tools.file_write import FileWriteTool
 from .tools.glob_tool import GlobTool
 from .tools.grep_tool import GrepTool
+from .memory import (
+    ensure_memory_dir,
+    extract_memory_tags,
+    append_to_daily_log,
+    build_dream_prompt,
+    should_auto_dream,
+    try_acquire_lock,
+    release_lock,
+    record_consolidation,
+)
 
 console = Console()
 _HISTORY_FILE = Path.home() / ".cc_mini_history"
@@ -250,6 +261,21 @@ def run_query(engine: Engine, user_input: str | list, print_mode: bool,
         console.print()
 
 
+def _run_dream(engine: Engine, memory_dir: Path,
+               permissions: PermissionChecker) -> None:
+    """Run dream consolidation: snapshot messages, submit dream prompt, restore."""
+    console.print("[dim]Starting dream consolidation…[/dim]")
+    saved_messages = list(engine.messages)
+    engine.messages = []
+    dream_prompt = build_dream_prompt(memory_dir)
+    run_query(engine, dream_prompt, print_mode=False, permissions=permissions)
+    engine.messages = saved_messages
+    # Rebuild system prompt to pick up updated MEMORY.md
+    engine.system_prompt = build_system_prompt(memory_dir=memory_dir)
+    record_consolidation(memory_dir)
+    console.print("[dim]Dream consolidation complete. Memory index updated.[/dim]")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="cc-mini",
                                      description="Minimal Python Claude Code")
@@ -266,6 +292,13 @@ def main() -> None:
                         help="Maximum output tokens for each model response")
     parser.add_argument("--resume", metavar="SESSION",
                         help="Resume a previous session (id or index)")
+    parser.add_argument("--memory-dir", help="Override memory directory path")
+    parser.add_argument("--no-auto-dream", action="store_true",
+                        help="Disable automatic dream consolidation")
+    parser.add_argument("--dream-interval", type=float,
+                        help="Hours between auto-dream runs (default: 24)")
+    parser.add_argument("--dream-min-sessions", type=int,
+                        help="Minimum new sessions before auto-dream triggers (default: 5)")
     args = parser.parse_args()
 
     try:
@@ -273,8 +306,13 @@ def main() -> None:
     except ValueError as exc:
         parser.error(str(exc))
 
+    # Memory setup
+    memory_dir = app_config.memory_dir
+    ensure_memory_dir(memory_dir)
+    session_id = datetime.now().strftime("%Y%m%d-%H%M%S")
+
     tools = [FileReadTool(), GlobTool(), GrepTool(), FileEditTool(), FileWriteTool(), BashTool()]
-    system_prompt = build_system_prompt()
+    system_prompt = build_system_prompt(memory_dir=memory_dir)
     permissions = PermissionChecker(auto_approve=args.auto_approve)
 
     cwd = str(Path.cwd())
@@ -482,6 +520,9 @@ def main() -> None:
                 compact_service=compact_service,
                 console=console,
                 app_config=app_config,
+                memory_dir=memory_dir,
+                permissions=permissions,
+                run_dream=lambda: _run_dream(engine, memory_dir, permissions),
                 new_session_store=lambda: SessionStore(cwd=cwd, model=app_config.model),
             )
             handle_command(cmd_name, cmd_args, cmd_ctx)
@@ -539,8 +580,6 @@ def main() -> None:
                     last_msg = engine._messages[-1]
                     if last_msg.get("role") == "assistant":
                         content = last_msg.get("content", "")
-                        # Extract text from content — handles both SDK objects
-                        # and normalized dicts (from _normalize_message_content)
                         if isinstance(content, str):
                             assistant_text = content
                         elif isinstance(content, list):
@@ -560,6 +599,26 @@ def main() -> None:
                             )
         except Exception:
             pass  # Non-essential
+
+        # Post-turn: extract <memory> tags
+        text = engine.last_assistant_text()
+        for mem in extract_memory_tags(text):
+            append_to_daily_log(memory_dir, mem)
+
+        # Auto-dream gate check
+        current_sid = session_store.session_id if session_store else session_id
+        sessions_path = session_store._dir if session_store else None
+        if app_config.auto_dream and should_auto_dream(
+            memory_dir,
+            min_hours=app_config.dream_interval_hours,
+            min_sessions=app_config.dream_min_sessions,
+            current_session_id=current_sid,
+            sessions_dir=sessions_path,
+        ):
+            if try_acquire_lock(memory_dir):
+                console.print("\n[dim]Auto-dream triggered (enough time + sessions since last consolidation)…[/dim]")
+                _run_dream(engine, memory_dir, permissions)
+                release_lock(memory_dir)
 
 
 if __name__ == "__main__":

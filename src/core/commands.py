@@ -6,7 +6,8 @@ Modelled after claude-code's ``src/commands.ts``.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from rich.console import Console
@@ -16,6 +17,7 @@ if TYPE_CHECKING:
     from .compact import CompactService
     from .config import AppConfig
     from .engine import Engine
+    from .permissions import PermissionChecker
     from .session import SessionStore
 
 
@@ -30,8 +32,11 @@ class CommandContext:
     compact_service: CompactService
     console: Console
     app_config: AppConfig
+    memory_dir: Path | None = None
+    permissions: PermissionChecker | None = None
+    run_dream: object = None  # Callable[[], None]
     # Callable that creates a fresh SessionStore (for /clear, /resume)
-    new_session_store: object  # Callable[[], SessionStore]
+    new_session_store: object = None  # Callable[[], SessionStore]
 
 
 # ---------------------------------------------------------------------------
@@ -210,17 +215,53 @@ def _cmd_clear(ctx: CommandContext, args: str) -> None:
     ctx.console.print("[green]✓[/green] Conversation cleared. New session started.")
 
 
+def _cmd_memory(ctx: CommandContext, args: str) -> None:
+    from .memory import load_memory_index
+
+    if ctx.memory_dir is None:
+        ctx.console.print("[dim]Memory system not configured.[/dim]")
+        return
+    index = load_memory_index(ctx.memory_dir)
+    if index:
+        ctx.console.print(index)
+    else:
+        ctx.console.print("[dim]No memories yet. Use /dream to consolidate daily logs.[/dim]")
+
+
+def _cmd_remember(ctx: CommandContext, args: str) -> None:
+    from .memory import append_to_daily_log
+
+    if ctx.memory_dir is None:
+        ctx.console.print("[dim]Memory system not configured.[/dim]")
+        return
+    if not args.strip():
+        ctx.console.print("[dim]Usage: /remember <text>[/dim]")
+        return
+    append_to_daily_log(ctx.memory_dir, args.strip())
+    ctx.console.print("[dim]Saved to daily log.[/dim]")
+
+
+def _cmd_dream(ctx: CommandContext, args: str) -> None:
+    if ctx.run_dream is None or not callable(ctx.run_dream):
+        ctx.console.print("[dim]Dream not available.[/dim]")
+        return
+    ctx.run_dream()
+
+
 # ---------------------------------------------------------------------------
 # Command registry
 # ---------------------------------------------------------------------------
 
 # (name, description, handler)
 _COMMAND_TABLE: list[tuple[str, str, object]] = [
-    ("help",    "Show available commands",                         _cmd_help),
-    ("compact", "Compress conversation context [instructions]",    _cmd_compact),
-    ("resume",  "Resume a past session [number|session-id]",       _cmd_resume),
-    ("history", "List saved sessions for this directory",          _cmd_history),
-    ("clear",   "Clear conversation, start new session",           _cmd_clear),
+    ("help",     "Show available commands",                         _cmd_help),
+    ("compact",  "Compress conversation context [instructions]",    _cmd_compact),
+    ("resume",   "Resume a past session [number|session-id]",       _cmd_resume),
+    ("history",  "List saved sessions for this directory",          _cmd_history),
+    ("clear",    "Clear conversation, start new session",           _cmd_clear),
+    ("memory",   "Show current memory index",                       _cmd_memory),
+    ("remember", "Save a note to the daily log [text]",             _cmd_remember),
+    ("dream",    "Consolidate daily logs into topic files",          _cmd_dream),
 ]
 
 _HANDLERS: dict[str, object] = {name: handler for name, _, handler in _COMMAND_TABLE}

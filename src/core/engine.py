@@ -143,6 +143,42 @@ class Engine:
             except Exception:
                 pass  # don't break the conversation on I/O errors
 
+    @property
+    def messages(self) -> list[dict]:
+        return self._messages
+
+    @messages.setter
+    def messages(self, value: list[dict]) -> None:
+        self._messages = value
+
+    @property
+    def system_prompt(self) -> str:
+        return self._system_prompt
+
+    @system_prompt.setter
+    def system_prompt(self, value: str) -> None:
+        self._system_prompt = value
+
+    def last_assistant_text(self) -> str:
+        """Extract text from the last assistant message."""
+        if not self._messages:
+            return ""
+        last = self._messages[-1]
+        if last.get("role") != "assistant":
+            return ""
+        content = last.get("content", "")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts = []
+            for block in content:
+                if hasattr(block, "text"):
+                    parts.append(block.text)
+                elif isinstance(block, dict) and block.get("type") == "text":
+                    parts.append(block.get("text", ""))
+            return "".join(parts)
+        return ""
+
     def abort(self):
         """Abort the current turn immediately.
 

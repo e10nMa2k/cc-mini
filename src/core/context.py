@@ -13,7 +13,7 @@ Guidelines:
 - Use Glob/Grep to find relevant files before reading them all"""
 
 
-def build_system_prompt(cwd: str | None = None) -> str:
+def build_system_prompt(cwd: str | None = None, memory_dir: Path | None = None) -> str:
     parts = [_BASE_PROMPT]
     parts.append(f"\n# Environment\nToday's date: {date.today().isoformat()}")
 
@@ -27,6 +27,10 @@ def build_system_prompt(cwd: str | None = None) -> str:
     claude_md = _find_claude_md(cwd)
     if claude_md:
         parts.append(f"\n# CLAUDE.md\n{claude_md}")
+
+    if memory_dir is not None:
+        from .memory import build_memory_system_section
+        parts.append(build_memory_system_section(memory_dir))
 
     # Companion intro (if hatched and not muted)
     companion_text = _get_companion_intro()
