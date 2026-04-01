@@ -182,7 +182,11 @@ def handle_buddy_command(
         save_companion_muted(False)
         console.print('[dim]Companion reactions unmuted.[/dim]')
 
+    elif subcmd == 'ia':
+        from .poke_game import start_game
+        start_game(client, console, model)
+
     else:
         console.print(
-            '[dim]Usage: /buddy [pet|stats|mute|unmute][/dim]'
+            '[dim]Usage: /buddy [pet|stats|mute|unmute|ia][/dim]'
         )

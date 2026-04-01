@@ -83,11 +83,12 @@ class _SlashCommandCompleter(Completer):
         ('cost',    'Show token usage and cost summary'),
         ('model',   'Show or switch model'),
         ('skills',  'List all available skills'),
-        ('buddy',   'Companion pet — hatch, pet, stats, mute/unmute'),
+        ('buddy',   'Companion pet — hatch, pet, stats, mute/unmute, ia'),
         ('buddy pet',   'Pet your companion'),
         ('buddy stats', 'Show companion stats'),
         ('buddy mute',  'Mute companion reactions'),
         ('buddy unmute', 'Unmute companion reactions'),
+        ('buddy ia',    'Idle Adventure — roguelike world exploration game'),
         ('exit',    'Exit the REPL'),
     ]
 
