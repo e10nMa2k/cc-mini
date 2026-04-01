@@ -21,8 +21,34 @@ A lightweight Python implementation of [Claude Code](https://claude.ai/code) for
 
 ## Installation
 
+### One-line install (recommended)
+
 ```bash
-cd /path/to/cc-mini
+curl -fsSL https://raw.githubusercontent.com/e10nMa2k/cc-mini/main/install.sh | bash
+```
+
+This clones the repo to `~/.cc-mini`, creates an isolated venv, and places a `cc-mini` launcher in `~/.local/bin`.  No `sudo` required.
+
+**Options** (set as env vars before the command):
+
+| Variable | Default | Description |
+|---|---|---|
+| `CC_MINI_INSTALL_DIR` | `~/.cc-mini` | Where to clone the repo |
+| `CC_MINI_BIN_DIR` | `~/.local/bin` | Where to put the `cc-mini` launcher |
+| `CC_MINI_BRANCH` | `main` | Git branch to install |
+
+Example with custom dir:
+```bash
+CC_MINI_INSTALL_DIR=~/tools/cc-mini curl -fsSL https://raw.githubusercontent.com/e10nMa2k/cc-mini/main/install.sh | bash
+```
+
+To update to the latest version, just re-run the same command.
+
+### Manual install (from source)
+
+```bash
+git clone https://github.com/e10nMa2k/cc-mini.git
+cd cc-mini
 pip install -e ".[dev]"
 ```
 
