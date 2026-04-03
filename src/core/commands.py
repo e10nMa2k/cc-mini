@@ -41,6 +41,8 @@ class CommandContext:
     cost_tracker: CostTracker | None = None
     new_session_store: object = None
     reconfigure_mode: object = None
+    plan_manager: object = None
+    pending_query: str | None = None  # set by commands that want a follow-up model query
 
 
 # ---------------------------------------------------------------------------
@@ -424,6 +426,30 @@ def _cmd_model(ctx: CommandContext, args: str) -> None:
 # Command registry
 # ---------------------------------------------------------------------------
 
+def _cmd_plan(ctx: CommandContext, args: str) -> None:
+    """Enter plan mode or show current plan."""
+    from .plan import PlanModeManager
+    pm: PlanModeManager | None = ctx.plan_manager  # type: ignore[assignment]
+    if pm is None:
+        ctx.console.print("[red]Plan mode not available.[/red]")
+        return
+    if pm.is_active:
+        content = pm.get_plan_content()
+        if content:
+            ctx.console.print(f"[bold]Current plan[/bold] ({pm.plan_file_path}):\n")
+            ctx.console.print(content)
+        else:
+            ctx.console.print(f"[dim]Plan mode active but no plan written yet. File: {pm.plan_file_path}[/dim]")
+    else:
+        pm.enter()
+        ctx.console.print("[green]Enabled plan mode[/green]")
+        # If user provided a description, queue it as a follow-up query
+        # Matches TS: onDone('Enabled plan mode', { shouldQuery: true })
+        description = args.strip()
+        if description:
+            ctx.pending_query = description
+
+
 # (name, description, handler)
 _COMMAND_TABLE: list[tuple[str, str, object]] = [
     ("help",     "Show available commands",                         _cmd_help),
@@ -437,6 +463,7 @@ _COMMAND_TABLE: list[tuple[str, str, object]] = [
     ("skills",   "List all available skills",                       _cmd_skills),
     ("cost",    "Show token usage and cost summary",               _cmd_cost),
     ("model",   "Show or switch model [model-name]",               _cmd_model),
+    ("plan",    "Enter plan mode or show current plan",             _cmd_plan),
 ]
 
 _HANDLERS: dict[str, object] = {name: handler for name, _, handler in _COMMAND_TABLE}

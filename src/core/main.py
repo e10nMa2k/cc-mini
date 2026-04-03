@@ -24,6 +24,7 @@ from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.layout.menus import CompletionsMenu
 from rich.console import Console
 from rich.live import Live
+from rich.markdown import Markdown as RichMarkdown
 from rich.spinner import Spinner
 from rich.text import Text
 
@@ -319,7 +320,43 @@ def _tool_preview(tool_name: str, tool_input: dict) -> str:
         return fp[-60:] if len(fp) > 60 else fp
     if tool_name in ("Glob", "Grep"):
         return tool_input.get("pattern", "")
+    if tool_name == "Agent":
+        return tool_input.get("description", "")[:60]
+    if tool_name == "SendMessage":
+        return tool_input.get("to", "")
     return ""
+
+
+def _collapsed_tool_summary(tool_names: list[str], done: bool = False) -> str:
+    """Summarize tools by type, matching TS CollapsedReadSearchContent.
+
+    E.g. active: "Reading 5 files…"  done: "Read 5 files"
+    """
+    from collections import Counter
+    counts = Counter(tool_names)
+    parts = []
+    _ACTIVE = {
+        "Read": ("Reading {n} files", "Reading file"),
+        "Glob": ("Searching {n} patterns", "Searching"),
+        "Grep": ("Searching {n} patterns", "Searching"),
+        "Bash": ("Running {n} commands", "Running command"),
+        "Edit": ("Editing {n} files", "Editing file"),
+        "Write": ("Writing {n} files", "Writing file"),
+    }
+    _DONE = {
+        "Read": ("Read {n} files", "Read file"),
+        "Glob": ("Searched {n} patterns", "Searched"),
+        "Grep": ("Searched {n} patterns", "Searched"),
+        "Bash": ("Ran {n} commands", "Ran command"),
+        "Edit": ("Edited {n} files", "Edited file"),
+        "Write": ("Wrote {n} files", "Wrote file"),
+    }
+    labels = _DONE if done else _ACTIVE
+    for name, n in counts.items():
+        plural, singular = labels.get(name, (f"{name} ×{{n}}", name))
+        parts.append(plural.format(n=n) if n > 1 else singular)
+    suffix = "" if done else "…"
+    return " · ".join(parts) + suffix
 
 
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
@@ -360,6 +397,76 @@ def _parse_input(text: str) -> str | list:
     return content
 
 
+# ---------------------------------------------------------------------------
+# Streaming Markdown Renderer
+# ---------------------------------------------------------------------------
+
+# Regex for top-level block boundaries: blank line, heading, fence, hr, list
+_BLOCK_BOUNDARY_RE = re.compile(r"\n(?=\n|\#{1,6} |```|---|\* |- |\d+\. )")
+
+
+class _StreamingMarkdown:
+    """Accumulates streamed text and renders markdown incrementally.
+
+    Matches TS StreamingMarkdown approach: splits at block boundaries,
+    prints stable (complete) blocks as Rich Markdown, keeps the unstable
+    trailing part in a Live widget for real-time updates.
+    """
+
+    def __init__(self, console: Console):
+        self._console = console
+        self._buf = ""
+        self._stable_len = 0  # how much of _buf has been printed as stable
+        self._live: Live | None = None
+
+    def feed(self, chunk: str) -> None:
+        """Add a streamed text chunk and update the display."""
+        self._buf += chunk
+        self._render()
+
+    def _render(self) -> None:
+        # Find the last block boundary in the full buffer
+        text = self._buf
+        boundary = self._stable_len
+        for m in _BLOCK_BOUNDARY_RE.finditer(text, self._stable_len):
+            boundary = m.start()
+
+        # Print newly stable blocks
+        if boundary > self._stable_len:
+            # Stop live widget before printing stable content
+            if self._live is not None:
+                self._live.stop()
+                self._live = None
+            stable_text = text[self._stable_len:boundary]
+            self._console.print(RichMarkdown(stable_text), end="")
+            self._stable_len = boundary
+
+        # Update live widget with the unstable trailing part
+        unstable = text[self._stable_len:]
+        if unstable:
+            if self._live is None:
+                self._live = Live(
+                    RichMarkdown(unstable),
+                    console=self._console,
+                    refresh_per_second=8,
+                    transient=True,
+                )
+                self._live.start()
+            else:
+                self._live.update(RichMarkdown(unstable))
+
+    def flush(self) -> None:
+        """Finalize: render any remaining text as stable markdown."""
+        if self._live is not None:
+            self._live.stop()
+            self._live = None
+        remaining = self._buf[self._stable_len:]
+        if remaining:
+            self._console.print(RichMarkdown(remaining), end="")
+        self._buf = ""
+        self._stable_len = 0
+
+
 class _SpinnerManager:
     """Manages a Rich Live spinner that shows while waiting for API/tool responses.
 
@@ -378,6 +485,7 @@ class _SpinnerManager:
             Spinner("dots", text=Text(self._spinner_text, style="dim")),
             console=self._console,
             refresh_per_second=12,
+            transient=True,
         )
         self._live.start()
 
@@ -390,35 +498,46 @@ class _SpinnerManager:
 
     def stop(self):
         if self._live is not None:
-            # Clear spinner line: update to empty then stop
-            self._live.update("")
             self._live.stop()
             self._live = None
 
 
 def run_query(engine: Engine, user_input: str | list, print_mode: bool,
-              permissions: PermissionChecker | None = None) -> None:
-    """Run a single turn. Ctrl+C or Esc cancels the active turn."""
+              permissions: PermissionChecker | None = None,
+              quiet: bool = False) -> None:
+    """Run a single turn. Ctrl+C or Esc cancels the active turn.
+
+    If *quiet* is True, suppress all terminal output (spinner, tool calls, text).
+    Used for background tasks like auto-dream.
+    """
     listener = EscListener(on_cancel=engine.abort)
     if permissions:
         permissions.set_esc_listener(listener)
 
     spinner = _SpinnerManager(console)
+    md_stream = _StreamingMarkdown(console)
     first_text = True
     streaming = False
+    # Track pending tool calls for spinner display.
+    # key: unique tool key, value: (tool_name, display_line)
+    pending_tools: dict[str, tuple[str, str]] = {}
 
     try:
         with listener:
-            spinner.start("Thinking…")
+            if not quiet:
+                spinner.start("Thinking…")
 
             for event in engine.submit(user_input):
-                if streaming and listener.check_esc_nonblocking():
+                if not quiet and streaming and listener.check_esc_nonblocking():
+                    md_stream.flush()
                     spinner.stop()
                     engine.cancel_turn()
                     console.print("\n[dim yellow]⏹ Turn cancelled (Esc)[/dim yellow]")
                     return
 
                 if event[0] == "text":
+                    if quiet:
+                        continue
                     if first_text:
                         spinner.stop()
                         listener.pause()
@@ -427,51 +546,78 @@ def run_query(engine: Engine, user_input: str | list, print_mode: bool,
                     if print_mode:
                         print(event[1], end="", flush=True)
                     else:
-                        console.print(event[1], end="", markup=False)
+                        md_stream.feed(event[1])
 
                 elif event[0] == "waiting":
+                    if not quiet:
+                        md_stream.flush()
                     streaming = False
-                    listener.resume()
-                    spinner.start("Preparing tool call…")
+                    if not quiet:
+                        listener.resume()
+                        spinner.start("Preparing tool call…")
 
                 elif event[0] == "tool_call":
-                    spinner.stop()
-                    streaming = False
-                    listener.pause()
-                    _, tool_name, tool_input, activity = event
-                    preview = _tool_preview(tool_name, tool_input)
-                    console.print(f"\n[dim]↳ {tool_name}({preview}) …[/dim]")
+                    if not quiet:
+                        spinner.stop()
+                        streaming = False
+                        listener.pause()
+                        _, tool_name, tool_input, activity = event
+                        preview = _tool_preview(tool_name, tool_input)
+                        key = f"{tool_name}({preview})"
+                        pending_tools[key] = (tool_name, f"↳ {key}")
 
                 elif event[0] == "tool_executing":
-                    # Permission granted — start spinner during actual execution
-                    _, tool_name, tool_input, activity = event
-                    activity_text = activity or f"Running {tool_name}…"
-                    spinner.start(activity_text)
+                    if not quiet:
+                        _, tool_name, tool_input, activity = event
+                        n = len(pending_tools)
+                        if n > 1:
+                            names = [tn for tn, _ in pending_tools.values()]
+                            spinner.start(_collapsed_tool_summary(names))
+                        else:
+                            _, line = next(iter(pending_tools.values()), ("", f"↳ {tool_name}"))
+                            activity_text = activity or f"Running {tool_name}…"
+                            spinner.start(f"{line} … {activity_text}")
 
                 elif event[0] == "tool_result":
-                    spinner.stop()
-                    _, tool_name, tool_input, result = event
-                    status = "[red]✗[/red]" if result.is_error else "[green]✓[/green]"
-                    console.print(f"[dim]  {status} done[/dim]")
-                    if result.is_error:
-                        console.print(f"  [red]{result.content[:300]}[/red]")
-                    streaming = False
-                    listener.resume()
-                    spinner.start("Thinking…")
-                    first_text = True
+                    if not quiet:
+                        spinner.stop()
+                        _, tool_name, tool_input, result = event
+                        preview = _tool_preview(tool_name, tool_input)
+                        key = f"{tool_name}({preview})"
+                        tname, line = pending_tools.pop(key, (tool_name, f"↳ {key}"))
+                        if result.is_error:
+                            console.print(f"[dim]{line}[/dim] [red]✗[/red]", highlight=False)
+                            console.print(f"  [red]{result.content[:200]}[/red]")
+                        else:
+                            console.print(f"[dim]{line}[/dim] [green]✓[/green]", highlight=False)
+
+                        if pending_tools:
+                            names = [tn for tn, _ in pending_tools.values()]
+                            spinner.start(_collapsed_tool_summary(names))
+                        else:
+                            streaming = False
+                            listener.resume()
+                            spinner.start("Thinking…")
+                            first_text = True
 
                 elif event[0] == "error":
-                    spinner.stop()
-                    console.print(f"\n[bold red]{event[1]}[/bold red]")
+                    if not quiet:
+                        md_stream.flush()
+                        spinner.stop()
+                        console.print(f"\n[bold red]{event[1]}[/bold red]")
 
+            md_stream.flush()
             spinner.stop()
     except (AbortedError, KeyboardInterrupt):
+        md_stream.flush()
         spinner.stop()
         if not isinstance(sys.exc_info()[1], AbortedError):
             engine.cancel_turn()
-        console.print("\n[dim yellow]⏹ Turn cancelled[/dim yellow]")
+        if not quiet:
+            console.print("\n[dim yellow]⏹ Turn cancelled[/dim yellow]")
         return
     finally:
+        md_stream.flush()
         spinner.stop()
         if permissions:
             permissions.set_esc_listener(None)
@@ -481,18 +627,20 @@ def run_query(engine: Engine, user_input: str | list, print_mode: bool,
 
 
 def _run_dream(engine: Engine, memory_dir: Path,
-               permissions: PermissionChecker) -> None:
+               permissions: PermissionChecker, quiet: bool = False) -> None:
     """Run dream consolidation: snapshot messages, submit dream prompt, restore."""
-    console.print("[dim]Starting dream consolidation…[/dim]")
+    if not quiet:
+        console.print("[dim]Starting dream consolidation…[/dim]")
     saved_messages = list(engine.messages)
     engine.messages = []
     dream_prompt = build_dream_prompt(memory_dir)
-    run_query(engine, dream_prompt, print_mode=False, permissions=permissions)
+    run_query(engine, dream_prompt, print_mode=False, permissions=permissions, quiet=quiet)
     engine.messages = saved_messages
     # Rebuild system prompt to pick up updated MEMORY.md
     engine.system_prompt = build_system_prompt(memory_dir=memory_dir)
     record_consolidation(memory_dir)
-    console.print("[dim]Dream consolidation complete. Memory index updated.[/dim]")
+    if not quiet:
+        console.print("[dim]Dream consolidation complete. Memory index updated.[/dim]")
 
 
 def main() -> None:
@@ -600,9 +748,18 @@ def main() -> None:
 
     worker_manager = WorkerManager(build_worker_engine=_build_worker_engine)
 
+    # Plan mode manager
+    from .plan import PlanModeManager
+    from .tools.plan_tools import EnterPlanModeTool, ExitPlanModeTool
+    plan_manager = PlanModeManager()
+
     def _build_tools_for_mode(coordinator_enabled: bool) -> list:
         tools = _build_base_tools()
         tools.append(AskUserQuestionTool())
+        tools.extend([
+            EnterPlanModeTool(plan_manager),
+            ExitPlanModeTool(plan_manager),
+        ])
         if coordinator_enabled:
             tools.extend([
                 AgentTool(worker_manager),
@@ -636,6 +793,8 @@ def main() -> None:
         session_store=session_store,
         cost_tracker=cost_tracker,
     )
+    plan_manager.bind_engine(engine)
+    permissions.set_plan_manager(plan_manager)
     compact_service = CompactService(
         client=engine._client,
         model=app_config.model,
@@ -773,19 +932,50 @@ def main() -> None:
             except Exception:
                 pass
 
+    _exiting = False
+
     def _drain_worker_notifications() -> None:
-        if not is_coordinator_mode():
+        if not is_coordinator_mode() or _exiting:
             return
         while True:
             notifications = worker_manager.drain_notifications()
             if not notifications:
                 return
             for notification in notifications:
-                console.print("\n[dim]Worker update received.[/dim]")
-                run_query(engine, notification, print_mode=False, permissions=permissions)
+                # Extract summary info from XML notification
+                import re as _re
+                _desc = _re.search(r"<summary>(.*?)</summary>", notification)
+                _uses = _re.search(r"<tool_uses>(\d+)</tool_uses>", notification)
+                _dur = _re.search(r"<duration_ms>(\d+)</duration_ms>", notification)
+                _status = _re.search(r"<status>(.*?)</status>", notification)
+                desc = _desc.group(1) if _desc else "Worker update"
+                uses = _uses.group(1) if _uses else "?"
+                dur_s = f"{int(_dur.group(1)) / 1000:.1f}" if _dur else "?"
+                status = _status.group(1) if _status else "completed"
+                icon = "[green]●[/green]" if status == "completed" else "[red]●[/red]"
+                console.print(f"\n{icon} [dim]{desc} ({uses} tool uses, {dur_s}s)[/dim]")
+                try:
+                    run_query(engine, notification, print_mode=False, permissions=permissions)
+                except (KeyboardInterrupt, Exception):
+                    return
+
+    def _show_worker_status() -> None:
+        """Show running worker status before prompt."""
+        if not is_coordinator_mode():
+            return
+        statuses = worker_manager.get_running_status()
+        if statuses:
+            for s in statuses:
+                uses = s["tool_uses"]
+                activity = s["activity"] or "working"
+                console.print(
+                    f"[dim]  ● {s['description']} — "
+                    f"{uses} tool use{'s' if uses != 1 else ''} · {activity}[/dim]"
+                )
 
     while True:
         _drain_worker_notifications()
+        _show_worker_status()
 
         # Start/restart animator before each prompt (picks up newly hatched companions)
         if animator is None:
@@ -816,6 +1006,7 @@ def main() -> None:
         except KeyboardInterrupt:
             now = time.monotonic()
             if now - last_ctrlc_time <= _DOUBLE_PRESS_TIMEOUT_MS:
+                _exiting = True
                 if animator:
                     animator.stop()
                 console.print("\n[dim]Goodbye.[/dim]")
@@ -899,10 +1090,18 @@ def main() -> None:
                     mode=current_session_mode(),
                 ),
                 reconfigure_mode=_apply_session_mode,
+                plan_manager=plan_manager,
             )
             handle_command(cmd_name, cmd_args, cmd_ctx)
             session_store = cmd_ctx.session_store
-            continue
+            # If the command set a pending query (e.g. /plan <description>),
+            # submit it to the model instead of continuing to the next prompt.
+            if cmd_ctx.pending_query:
+                user_input = cmd_ctx.pending_query
+                cmd_ctx.pending_query = None
+                # Fall through to normal query processing below
+            else:
+                continue
 
         # Auto-compact when approaching token limits
         if should_compact(engine.get_messages(), model=app_config.model,
@@ -1013,8 +1212,8 @@ def main() -> None:
             sessions_dir=sessions_path,
         ):
             if try_acquire_lock(memory_dir):
-                console.print("\n[dim]Auto-dream triggered (enough time + sessions since last consolidation)…[/dim]")
-                _run_dream(engine, memory_dir, permissions)
+                console.print("[dim]Auto-dream running…[/dim]")
+                _run_dream(engine, memory_dir, permissions, quiet=True)
                 release_lock(memory_dir)
 
     # Print cost summary on exit

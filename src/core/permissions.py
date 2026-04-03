@@ -8,8 +8,13 @@ from .tools.base import Tool
 if TYPE_CHECKING:
     from ._keylistener import EscListener
     from .sandbox.manager import SandboxManager
+    from .plan import PlanModeManager
 
 PermissionBehavior = Literal["allow", "deny"]
+
+# Tools allowed in plan mode (read-only + plan file writes)
+_PLAN_MODE_ALLOWED_TOOLS = {"Read", "Glob", "Grep", "AskUserQuestion", "EnterPlanMode", "ExitPlanMode"}
+_PLAN_MODE_WRITE_TOOLS = {"Edit", "Write"}  # allowed only for plan file
 
 
 class PermissionChecker:
@@ -24,11 +29,39 @@ class PermissionChecker:
         self._always_allow: set[str] = set()
         self._esc_listener: EscListener | None = None
         self._sandbox = sandbox_manager
+        self._plan_manager: PlanModeManager | None = None
+
+    def set_plan_manager(self, plan_manager: PlanModeManager) -> None:
+        self._plan_manager = plan_manager
 
     def set_esc_listener(self, listener: EscListener | None):
         self._esc_listener = listener
 
     def check(self, tool: Tool, inputs: dict) -> PermissionBehavior:
+        # Plan mode restrictions: only allow read-only tools + plan file writes
+        if self._plan_manager is not None and self._plan_manager.is_active:
+            if tool.name in _PLAN_MODE_ALLOWED_TOOLS:
+                return "allow"
+            if tool.name in _PLAN_MODE_WRITE_TOOLS:
+                # Only allow writing to the plan file
+                file_path = inputs.get("file_path", "")
+                plan_path = self._plan_manager.plan_file_path
+                if plan_path and file_path == plan_path:
+                    return "allow"
+                from rich.console import Console
+                Console().print(
+                    f"[yellow]Plan mode: can only edit the plan file "
+                    f"({plan_path})[/yellow]"
+                )
+                return "deny"
+            # Block everything else (Bash, etc.)
+            from rich.console import Console
+            Console().print(
+                f"[yellow]Plan mode: {tool.name} is not allowed. "
+                f"Only read-only tools and plan file editing are permitted.[/yellow]"
+            )
+            return "deny"
+
         if tool.is_read_only():
             return "allow"
         if self._auto_approve:

@@ -113,6 +113,8 @@ If you can say it in one sentence, don't use three. Prefer short, direct sentenc
 # ---------------------------------------------------------------------------
 # Dynamic sections
 # ---------------------------------------------------------------------------
+# Dynamic sections
+# ---------------------------------------------------------------------------
 
 def _get_env_section(cwd: str) -> str:
     return f"# Environment\nToday's date: {date.today().isoformat()}\nWorking directory: {cwd}"
@@ -175,6 +177,62 @@ def _get_companion_intro() -> str:
         return companion_intro_text(companion.name, companion.species)
     except Exception:
         return ""
+
+
+def get_plan_mode_section(plan_file_path: str) -> str:
+    """System prompt section injected when plan mode is active.
+
+    Corresponds to getPlanModeV2Instructions() in messages.ts.
+    """
+    plan_file = Path(plan_file_path)
+    if plan_file.exists():
+        plan_file_info = (
+            f"A plan file already exists at {plan_file_path}. "
+            "You can read it and make incremental edits using the Edit tool."
+        )
+    else:
+        plan_file_info = (
+            f"No plan file exists yet. You should create your plan at "
+            f"{plan_file_path} using the Write tool."
+        )
+
+    return f"""Plan mode is active. The user indicated that they do not want you to execute yet -- you MUST NOT make any edits (with the exception of the plan file mentioned below), run any non-readonly tools (including changing configs or making commits), or otherwise make any changes to the system. This supercedes any other instructions you have received.
+
+## Plan File Info:
+{plan_file_info}
+You should build your plan incrementally by writing to or editing this file. NOTE that this is the only file you are allowed to edit - other than this you are only allowed to take READ-ONLY actions.
+
+## Plan Workflow
+
+### Phase 1: Initial Understanding
+Goal: Gain a comprehensive understanding of the user's request by reading through code and asking them questions.
+
+1. Focus on understanding the user's request and the code associated with their request. Actively search for existing functions, utilities, and patterns that can be reused.
+2. Use Glob, Grep, and Read tools to explore the codebase.
+
+### Phase 2: Design
+Goal: Design an implementation approach.
+
+Based on your exploration, design a concrete implementation strategy. Consider multiple approaches and their trade-offs.
+
+### Phase 3: Review
+Goal: Review and ensure alignment with the user's intentions.
+1. Read the critical files identified during exploration
+2. Ensure that the plan aligns with the user's original request
+3. Use AskUserQuestion to clarify any remaining questions with the user
+
+### Phase 4: Final Plan
+Goal: Write your final plan to the plan file.
+- Begin with a **Context** section: explain why this change is being made
+- Include only your recommended approach, not all alternatives
+- Include the paths of critical files to be modified
+- Reference existing functions and utilities you found that should be reused
+- Include a verification section describing how to test the changes
+
+### Phase 5: Call ExitPlanMode
+At the very end of your turn, once you are happy with your final plan file, call ExitPlanMode to indicate to the user that you are done planning.
+
+**Important:** Use AskUserQuestion ONLY to clarify requirements or choose between approaches. Use ExitPlanMode to request plan approval. Do NOT ask about plan approval in any other way."""
 
 
 # ---------------------------------------------------------------------------

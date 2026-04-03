@@ -1,5 +1,6 @@
 from __future__ import annotations
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import TYPE_CHECKING, Any, Iterator
 from .config import DEFAULT_MODEL, default_max_tokens_for_model, resolve_model
 from .llm import LLMClient
@@ -343,29 +344,99 @@ class Engine:
                     break
 
                 tool_results = []
-                for tool_use in tool_uses:
+
+                # Partition into batches: consecutive read-only tools run in
+                # parallel; a non-read-only tool runs alone.
+                batches: list[list] = []
+                for tu in tool_uses:
+                    t = self._tools.get(_block_name(tu))
+                    is_concurrent = t is not None and t.is_read_only()
+                    if batches and batches[-1][0] == is_concurrent and is_concurrent:
+                        batches[-1][1].append(tu)
+                    else:
+                        batches.append((is_concurrent, [tu]))
+
+                for is_concurrent, batch in batches:
                     if self._aborted:
                         raise AbortedError()
-                    tool_name = _block_name(tool_use)
-                    tool_input = _block_input(tool_use)
-                    tool = self._tools.get(tool_name)
-                    activity = tool.get_activity_description(**tool_input) if tool else None
-                    yield ("tool_call", tool_name, tool_input, activity)
 
-                    # Check permission before starting spinner
-                    if tool and self._permissions.check(tool, tool_input) == "deny":
-                        result = ToolResult(content="Permission denied.", is_error=True)
+                    if is_concurrent and len(batch) > 1:
+                        # --- parallel execution for read-only tools ---
+                        # Phase 1: emit tool_call events + check permissions
+                        approved: list[tuple] = []  # (tool_use, tool, activity)
+                        denied_results: dict[str, ToolResult] = {}  # by tool_use_id
+                        for tu in batch:
+                            tn = _block_name(tu)
+                            ti = _block_input(tu)
+                            tool = self._tools.get(tn)
+                            act = tool.get_activity_description(**ti) if tool else None
+                            yield ("tool_call", tn, ti, act)
+                            if tool and self._permissions.check(tool, ti) == "deny":
+                                denied_results[_block_id(tu)] = ToolResult(
+                                    content="Permission denied.", is_error=True)
+                            else:
+                                approved.append((tu, tool, act))
+
+                        # Phase 2: emit tool_executing for approved, then run in parallel
+                        executed_results: dict[str, ToolResult] = {}
+                        if approved:
+                            for tu, tool, act in approved:
+                                tn = _block_name(tu)
+                                ti = _block_input(tu)
+                                yield ("tool_executing", tn, ti, act)
+
+                            with ThreadPoolExecutor(max_workers=min(len(approved), 10)) as pool:
+                                futures = {}
+                                for tu, tool, act in approved:
+                                    f = pool.submit(self._execute_tool, tu, skip_permission=True)
+                                    futures[f] = tu
+                                for f in as_completed(futures):
+                                    tu = futures[f]
+                                    try:
+                                        executed_results[_block_id(tu)] = f.result()
+                                    except Exception as exc:
+                                        executed_results[_block_id(tu)] = ToolResult(
+                                            content=f"Tool execution error: {exc}", is_error=True)
+
+                        # Phase 3: emit results in original batch order
+                        for tu in batch:
+                            tid = _block_id(tu)
+                            tn = _block_name(tu)
+                            ti = _block_input(tu)
+                            result = denied_results.get(tid) or executed_results.get(tid)
+                            if result is None:
+                                result = ToolResult(content="No result", is_error=True)
+                            yield ("tool_result", tn, ti, result)
+                            tool_results.append({
+                                "type": "tool_result",
+                                "tool_use_id": tid,
+                                "content": result.content,
+                                "is_error": result.is_error,
+                            })
                     else:
-                        yield ("tool_executing", tool_name, tool_input, activity)
-                        result = self._execute_tool(tool_use, skip_permission=True)
+                        # --- sequential execution (single tool or non-read-only) ---
+                        for tu in batch:
+                            if self._aborted:
+                                raise AbortedError()
+                            tn = _block_name(tu)
+                            ti = _block_input(tu)
+                            tool = self._tools.get(tn)
+                            act = tool.get_activity_description(**ti) if tool else None
+                            yield ("tool_call", tn, ti, act)
 
-                    yield ("tool_result", tool_name, tool_input, result)
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": _block_id(tool_use),
-                        "content": result.content,
-                        "is_error": result.is_error,
-                    })
+                            if tool and self._permissions.check(tool, ti) == "deny":
+                                result = ToolResult(content="Permission denied.", is_error=True)
+                            else:
+                                yield ("tool_executing", tn, ti, act)
+                                result = self._execute_tool(tu, skip_permission=True)
+
+                            yield ("tool_result", tn, ti, result)
+                            tool_results.append({
+                                "type": "tool_result",
+                                "tool_use_id": _block_id(tu),
+                                "content": result.content,
+                                "is_error": result.is_error,
+                            })
 
                 self._messages.append({
                     "role": "user",

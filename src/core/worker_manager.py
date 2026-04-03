@@ -28,6 +28,9 @@ class WorkerTask:
     result: str = ""
     usage: WorkerUsage = field(default_factory=WorkerUsage)
     thread: threading.Thread | None = None
+    # Live progress tracking
+    tool_use_count: int = 0
+    current_activity: str = ""
 
 
 class WorkerManager:
@@ -102,6 +105,20 @@ class WorkerManager:
         with self._lock:
             return any(self._is_running(task) for task in self._tasks.values())
 
+    def get_running_status(self) -> list[dict]:
+        """Return status of all running workers for live display."""
+        with self._lock:
+            return [
+                {
+                    "task_id": t.task_id,
+                    "description": t.description,
+                    "tool_uses": t.tool_use_count,
+                    "activity": t.current_activity,
+                }
+                for t in self._tasks.values()
+                if self._is_running(t)
+            ]
+
     def _get_task(self, task_id: str) -> WorkerTask:
         with self._lock:
             task = self._tasks.get(task_id)
@@ -131,13 +148,21 @@ class WorkerManager:
         parts: list[str] = []
         total_tokens = 0
         tool_uses = 0
+        task.tool_use_count = 0
+        task.current_activity = "Initializing…"
         try:
             for event in task.engine.submit(prompt):
                 kind = event[0]
                 if kind == "text":
                     parts.append(event[1])
+                    task.current_activity = "Thinking…"
                 elif kind == "tool_call":
                     tool_uses += 1
+                    task.tool_use_count = tool_uses
+                    tool_name = event[1] if len(event) > 1 else ""
+                    task.current_activity = f"Running {tool_name}…"
+                elif kind == "tool_result":
+                    task.current_activity = "Thinking…"
                 elif kind == "usage":
                     usage = event[1]
                     total_tokens += (
@@ -160,6 +185,7 @@ class WorkerManager:
 
         task.status = status
         task.summary = summary
+        task.current_activity = ""
         task.result = "".join(parts).strip()
         task.usage = WorkerUsage(
             total_tokens=total_tokens,
