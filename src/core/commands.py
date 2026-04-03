@@ -376,8 +376,8 @@ def _cmd_model(ctx: CommandContext, args: str) -> None:
 
     def _tokens():
         t = [("bold ansibrightcyan", "  Select model\n"),
-             ("ansigray", "  Switch between Claude models. Applies to this session and future\n"
-                          "  Claude Code sessions. For other/previous model names, specify with --model.\n\n")]
+             ("ansigray", "  Switch between models. Applies to this session and future\n"
+                          "  sessions. For other/previous model names, specify with --model.\n\n")]
         for i, (alias, label, desc) in enumerate(options):
             is_cur = i == cursor[0]
             is_active = resolve_model(alias) == current

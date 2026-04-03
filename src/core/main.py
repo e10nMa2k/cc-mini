@@ -84,16 +84,8 @@ _DOUBLE_PRESS_TIMEOUT_MS = 0.8
 class _SlashCommandCompleter(Completer):
     """Autocomplete for slash commands. Triggers when input starts with "/"."""
 
-    # (name, description) — built-in + buddy
-    BUILTIN_COMMANDS: list[tuple[str, str]] = [
-        ('help',    'Show available commands'),
-        ('compact', 'Compress conversation context'),
-        ('resume',  'Resume a past session'),
-        ('history', 'List saved sessions'),
-        ('clear',   'Clear conversation, start new session'),
-        ('cost',    'Show token usage and cost summary'),
-        ('model',   'Show or switch model'),
-        ('skills',  'List all available skills'),
+    # Extra commands not in _COMMAND_TABLE (handled separately in the REPL)
+    _EXTRA_COMMANDS: list[tuple[str, str]] = [
         ('buddy',            'Companion pet — hatch, pet, stats, mute/unmute, ia'),
         ('buddy pet',        'Pet your companion'),
         ('buddy stats',      'Show companion stats'),
@@ -106,15 +98,23 @@ class _SlashCommandCompleter(Completer):
         ('exit',    'Exit the REPL'),
     ]
 
+    def _all_commands(self) -> list[tuple[str, str]]:
+        """Merge _COMMAND_TABLE entries with extra commands for a single source of truth."""
+        from .commands import _COMMAND_TABLE
+        cmds: list[tuple[str, str]] = [(name, desc) for name, desc, _ in _COMMAND_TABLE]
+        cmds.extend(self._EXTRA_COMMANDS)
+        return cmds
+
     def get_completions(self, document: Document, complete_event):
         text = document.text_before_cursor.lstrip()
         if not text.startswith('/'):
             return
 
         query = text[1:].lower()
+        all_commands = self._all_commands()
 
         # Built-in commands
-        for name, desc in self.BUILTIN_COMMANDS:
+        for name, desc in all_commands:
             if not query or name.startswith(query):
                 yield Completion(
                     f'/{name}',
@@ -126,9 +126,10 @@ class _SlashCommandCompleter(Completer):
         # Dynamic skill commands
         try:
             from .skills import list_skills
+            seen = {name for name, _ in all_commands}
             for skill in list_skills(user_invocable_only=True):
                 # Skip if already covered by built-in commands
-                if any(name == skill.name for name, _ in self.BUILTIN_COMMANDS):
+                if skill.name in seen:
                     continue
                 if not query or skill.name.startswith(query):
                     yield Completion(
@@ -496,7 +497,7 @@ def _run_dream(engine: Engine, memory_dir: Path,
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="cc-mini",
-                                     description="Minimal Python Claude Code")
+                                     description="Minimal AI coding assistant")
     parser.add_argument("prompt", nargs="?", help="Prompt to send (optional)")
     parser.add_argument("-p", "--print", action="store_true",
                         help="Non-interactive: print response and exit")

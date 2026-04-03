@@ -58,7 +58,7 @@ def get_coordinator_user_context(worker_tools: Iterable[str]) -> dict[str, str]:
 
 
 def get_coordinator_system_prompt() -> str:
-    return """You are Claude Code operating in coordinator mode.
+    return """You are operating in coordinator mode.
 
 ## Role
 
