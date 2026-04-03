@@ -29,11 +29,12 @@ _TIER_5_25 = _PricingTier(input=5.0, output=25.0, cache_write=6.25, cache_read=0
 _TIER_HAIKU_35 = _PricingTier(input=0.80, output=4.0, cache_write=1.0, cache_read=0.08)
 _TIER_HAIKU_45 = _PricingTier(input=1.0, output=5.0, cache_write=1.25, cache_read=0.10)
 
+_TIER_30_150 = _PricingTier(input=30.0, output=150.0, cache_write=37.5, cache_read=3.0)
+
 # Model prefix/substring -> tier.  Order matters: first match wins.
 _MODEL_PRICING: list[tuple[str, _PricingTier]] = [
     ("claude-3-5-haiku", _TIER_HAIKU_35),
     ("claude-haiku-4-5", _TIER_HAIKU_45),
-    ("claude-opus-4-6", _TIER_5_25),
     ("claude-opus-4-5", _TIER_5_25),
     ("claude-opus-4-1", _TIER_15_75),
     ("claude-opus-4", _TIER_15_75),
@@ -45,14 +46,30 @@ _MODEL_PRICING: list[tuple[str, _PricingTier]] = [
 _DEFAULT_TIER = _TIER_3_15  # fallback for Claude-family / unknown legacy names
 
 
-def _tier_for_model(model: str) -> _PricingTier | None:
+def _tier_for_model(model: str, usage: dict | None = None) -> _PricingTier | None:
     model_lower = model.lower()
+    
+    if "claude-opus-4-6" in model_lower:
+        if usage and usage.get("speed") == "fast":
+            return _TIER_30_150
+        return _TIER_5_25
+        
     for prefix, tier in _MODEL_PRICING:
         if prefix in model_lower:
             return tier
     if model_lower.startswith(("gpt-", "o1", "o3", "o4")):
         return None
     return _DEFAULT_TIER
+
+
+def _is_known_model(model: str) -> bool:
+    model_lower = model.lower()
+    if "claude-opus-4-6" in model_lower:
+        return True
+    for prefix, _ in _MODEL_PRICING:
+        if prefix in model_lower:
+            return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -127,7 +144,7 @@ class CostTracker:
     @staticmethod
     def calculate_cost(model: str, usage: dict) -> float:
         """Return cost in USD for a single API call."""
-        tier = _tier_for_model(model)
+        tier = _tier_for_model(model, usage)
         if tier is None:
             return 0.0
         inp = usage.get("input_tokens", 0)
@@ -135,12 +152,10 @@ class CostTracker:
         cache_read = usage.get("cache_read_input_tokens", 0)
         cache_write = usage.get("cache_creation_input_tokens", 0)
 
-        # Cached tokens are billed at cache rates, not regular input rate.
-        # Regular input tokens = total input - cache_read - cache_write
-        regular_input = max(inp - cache_read - cache_write, 0)
-
+        # Anthropic API: input_tokens already excludes cached tokens.
+        # cache_read and cache_write are billed separately at their own rates.
         cost = (
-            regular_input * tier.input
+            inp * tier.input
             + out * tier.output
             + cache_read * tier.cache_read
             + cache_write * tier.cache_write
@@ -161,7 +176,7 @@ class CostTracker:
         mu.cache_creation_input_tokens += usage.get("cache_creation_input_tokens", 0)
         mu.cost_usd += cost
         mu.api_duration_s += api_duration_s
-        if _tier_for_model(model) is None:
+        if not _is_known_model(model):
             mu.pricing_known = False
         return cost
 
@@ -180,7 +195,7 @@ class CostTracker:
         lines: list[str] = []
         lines.append(f"Total cost:            ${self._total_cost_usd:.2f}")
         if unknown_pricing:
-            lines.append("Pricing note:          Some model pricing is unavailable; total excludes those calls")
+            lines.append("Pricing note:          Costs may be inaccurate due to usage of unknown models")
         lines.append(f"Total duration (API):  {_fmt_duration(self._total_api_duration_s)}")
         lines.append(f"Total duration (wall): {_fmt_duration(wall_s)}")
         la = self._lines_added
