@@ -1,12 +1,12 @@
 from unittest.mock import patch, MagicMock
 import subprocess
-from core.context import build_system_prompt, _get_git_status, _find_claude_md
+from core.context import build_system_prompt, _get_git_section, _get_claude_md_section
 
 
 def test_build_system_prompt_contains_base_instructions():
     prompt = build_system_prompt(cwd="/tmp")
-    assert "Claude Code" in prompt
-    assert "AI assistant" in prompt
+    assert "software engineering tasks" in prompt
+    assert "tools" in prompt.lower()
 
 
 def test_build_system_prompt_contains_date():
@@ -44,7 +44,7 @@ def test_build_system_prompt_without_claude_md(tmp_path):
     assert "# Test Project" not in prompt
 
 
-def test_get_git_status_returns_branch_and_log(tmp_path):
+def test_get_git_section_returns_branch_and_log(tmp_path):
     def fake_run(cmd, **kwargs):
         result = MagicMock()
         if "branch" in cmd:
@@ -58,46 +58,48 @@ def test_get_git_status_returns_branch_and_log(tmp_path):
         return result
 
     with patch("core.context.subprocess.run", side_effect=fake_run):
-        status = _get_git_status(str(tmp_path))
+        status = _get_git_section(str(tmp_path))
 
     assert "feature-branch" in status
     assert "M file.py" in status
     assert "abc1234" in status
 
 
-def test_get_git_status_returns_empty_on_non_git_dir():
+def test_get_git_section_returns_empty_on_non_git_dir():
     def fake_run(cmd, **kwargs):
         result = MagicMock()
         result.stdout = ""
         return result
 
     with patch("core.context.subprocess.run", side_effect=fake_run):
-        status = _get_git_status("/tmp/not-a-git-repo")
+        status = _get_git_section("/tmp/not-a-git-repo")
     assert status == ""
 
 
-def test_get_git_status_returns_empty_on_exception():
+def test_get_git_section_returns_empty_on_exception():
     with patch("core.context.subprocess.run", side_effect=OSError("fail")):
-        status = _get_git_status("/tmp")
+        status = _get_git_section("/tmp")
     assert status == ""
 
 
-def test_find_claude_md_reads_file(tmp_path):
+def test_get_claude_md_section_reads_file(tmp_path):
     claude_md = tmp_path / "CLAUDE.md"
     claude_md.write_text("hello world")
 
-    result = _find_claude_md(str(tmp_path))
-    assert result == "hello world"
+    result = _get_claude_md_section(str(tmp_path))
+    assert "hello world" in result
+    assert "CLAUDE.md" in result
 
 
-def test_find_claude_md_returns_empty_when_missing(tmp_path):
-    result = _find_claude_md(str(tmp_path))
+def test_get_claude_md_section_returns_empty_when_missing(tmp_path):
+    result = _get_claude_md_section(str(tmp_path))
     assert result == ""
 
 
-def test_find_claude_md_truncates_large_file(tmp_path):
+def test_get_claude_md_section_truncates_large_file(tmp_path):
     claude_md = tmp_path / "CLAUDE.md"
     claude_md.write_text("x" * 20_000)
 
-    result = _find_claude_md(str(tmp_path))
-    assert len(result) == 10_000
+    result = _get_claude_md_section(str(tmp_path))
+    # Section includes header, so content is truncated to fit within 10k chars
+    assert len(result) <= 10_100  # Allow some margin for the header
