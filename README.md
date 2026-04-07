@@ -30,8 +30,8 @@ The entire core is `~1000 lines of Python`
 - **Interactive REPL** with streaming output, command history, slash command autocomplete
 - **Agentic tool loop** — Claude calls tools autonomously until the task is complete
 - **9 built-in tools**: `Read`, `Edit`, `Write`, `Glob`, `Grep`, `Bash`, `AskUser`, `EnterPlanMode`, `ExitPlanMode`
-- **Plan mode** — explore codebase and design approach before implementing
-- **Permission system** — reads auto-approved, writes/bash ask for confirmation
+- **Plan mode** — parallel subagents explore codebase before you implement, with permission isolation
+- **Permission system** — mode-aware (default/plan), reads auto-approved, writes/bash ask for confirmation
 - **Session persistence** — auto-save conversations, `/resume` to continue later
 - **Context compression** — auto-compact when approaching token limits
 - **Anthropic + OpenAI compatible** — works with any compatible API endpoint
@@ -137,7 +137,23 @@ Running skill: /review…
 | `EnterPlanMode` | Enter plan mode | auto-approved |
 | `ExitPlanMode` | Exit plan mode | auto-approved |
 
-Coordinator mode adds: `Agent` (spawn worker), `SendMessage` (continue worker), `TaskStop` (stop worker). See [coordinator docs](docs/coordinator.md).
+Coordinator mode adds: `Agent` (spawn worker), `SendMessage` (continue worker), `TaskStop` (stop worker). Plan mode also uses `Agent` to launch parallel read-only explore/plan subagents. See [coordinator docs](docs/coordinator.md).
+
+---
+
+## Data Paths
+
+| Data | Path |
+|------|------|
+| Installation (source code) | `~/.cc-mini/` |
+| Sessions | `~/.config/cc-mini/sessions/` |
+| Memory (KAIROS) | `~/.config/cc-mini/memory/` |
+| Plans | `~/.config/cc-mini/plans/` |
+| REPL history | `~/.config/cc-mini/history` |
+| Companion data | `~/.config/cc-mini/companion.json` |
+| User skills | `~/.cc-mini/skills/` |
+| Project skills | `{cwd}/.cc-mini/skills/` |
+| Project config | `.cc-mini.toml` |
 
 ---
 
