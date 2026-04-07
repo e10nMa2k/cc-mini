@@ -63,7 +63,7 @@ class GrepTool(Tool):
         cmd.extend([pattern, path])
 
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
             output = result.stdout.strip()
             return ToolResult(content=output if output else "No matches found.")
         except FileNotFoundError:

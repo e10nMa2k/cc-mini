@@ -124,17 +124,20 @@ def _get_git_section(cwd: str) -> str:
     try:
         branch = subprocess.run(
             ["git", "branch", "--show-current"],
-            capture_output=True, text=True, cwd=cwd, timeout=5,
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            cwd=cwd, timeout=5,
         ).stdout.strip()
 
         status = subprocess.run(
             ["git", "status", "--short"],
-            capture_output=True, text=True, cwd=cwd, timeout=5,
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            cwd=cwd, timeout=5,
         ).stdout.strip()[:2000]
 
         log = subprocess.run(
             ["git", "log", "--oneline", "-5"],
-            capture_output=True, text=True, cwd=cwd, timeout=5,
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            cwd=cwd, timeout=5,
         ).stdout.strip()
 
         if not branch and not status and not log:

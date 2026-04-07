@@ -45,7 +45,7 @@ def _generate_slug() -> str:
 
 
 def _get_plans_dir() -> Path:
-    plans_dir = Path.home() / ".claude" / "plans"
+    plans_dir = Path.home() / ".mini-claude" / "plans"
     plans_dir.mkdir(parents=True, exist_ok=True)
     return plans_dir
 

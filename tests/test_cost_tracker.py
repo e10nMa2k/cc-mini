@@ -57,6 +57,10 @@ def test_tier_opus_4_6():
     tier = _tier_for_model("claude-opus-4-6")
     assert tier.input == 5.0
     assert tier.output == 25.0
+    
+    tier_fast = _tier_for_model("claude-opus-4-6", {"speed": "fast"})
+    assert tier_fast.input == 30.0
+    assert tier_fast.output == 150.0
 
 
 def test_tier_haiku_35():
@@ -97,10 +101,10 @@ def test_calculate_cost_with_cache():
         "cache_read_input_tokens": 500_000,
         "cache_creation_input_tokens": 200_000,
     })
-    # regular input = 1M - 500k - 200k = 300k
-    # cost = 300k * 3/M + 500k * 0.30/M + 200k * 3.75/M
-    #      = 0.9 + 0.15 + 0.75 = 1.8
-    assert abs(cost - 1.8) < 0.001
+    # input_tokens already excludes cached tokens (Anthropic API semantics)
+    # cost = 1M * 3/M + 500k * 0.30/M + 200k * 3.75/M
+    #      = 3.0 + 0.15 + 0.75 = 3.9
+    assert abs(cost - 3.9) < 0.001
 
 
 def test_calculate_cost_small():

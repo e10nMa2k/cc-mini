@@ -90,7 +90,8 @@ class BashTool(Tool):
 
         try:
             result = subprocess.run(
-                actual_command, shell=True, capture_output=True, text=True, timeout=timeout
+                actual_command, shell=True, capture_output=True,
+                text=True, encoding="utf-8", errors="replace", timeout=timeout,
             )
             parts = []
             if result.stdout:

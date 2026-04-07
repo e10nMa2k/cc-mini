@@ -483,6 +483,10 @@ class _SpinnerManager:
 
     def start(self, text: str = "Thinking…"):
         self._spinner_text = text
+        # Stop existing Live instance if running
+        if self._live is not None:
+            self._live.stop()
+            self._live = None
         self._live = Live(
             Spinner("dots", text=Text(self._spinner_text, style="dim")),
             console=self._console,
@@ -905,7 +909,7 @@ def main() -> None:
         console.print(f"[dim]$ {cmd}[/dim]")
         try:
             result = subprocess.run(
-                cmd, shell=True, text=True,
+                cmd, shell=True, text=True, encoding="utf-8", errors="replace",
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             )
             if result.stdout:
