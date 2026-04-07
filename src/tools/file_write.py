@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
-from .base import Tool, ToolResult
+from core.tool import Tool, ToolResult
+from .file_edit import FileEditTool
 
 
 class FileWriteTool(Tool):
@@ -32,6 +33,16 @@ class FileWriteTool(Tool):
 
     def execute(self, file_path: str, content: str) -> ToolResult:
         path = Path(file_path)
+
+        # Enforce read-before-write for existing files
+        if path.exists():
+            if (file_path not in FileEditTool._read_files
+                    and str(path.resolve()) not in FileEditTool._read_files):
+                return ToolResult(
+                    content=f"Error: You must read {file_path} before overwriting it. Use the Read tool first.",
+                    is_error=True,
+                )
+
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content, encoding="utf-8")

@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from core.sandbox.config import SandboxConfig, SandboxFilesystemConfig
-from core.sandbox.wrapper import (
+from features.sandbox.config import SandboxConfig, SandboxFilesystemConfig
+from features.sandbox.wrapper import (
     build_bwrap_args,
     wrap_command,
     _resolve_paths,

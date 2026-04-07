@@ -4,7 +4,7 @@ import re
 import subprocess
 from pathlib import Path
 import glob as glob_module
-from .base import Tool, ToolResult
+from core.tool import Tool, ToolResult
 
 
 class GrepTool(Tool):
@@ -31,13 +31,20 @@ class GrepTool(Tool):
             "pattern": {"type": "string", "description": "Regex pattern"},
             "path": {"type": "string", "description": "Directory or file to search"},
             "glob": {"type": "string", "description": "File glob filter e.g. '*.py'"},
+            "type": {"type": "string", "description": "File type filter (e.g. 'py', 'js', 'rust')"},
             "output_mode": {
                 "type": "string",
-                "enum": ["files_with_matches", "content"],
+                "enum": ["files_with_matches", "content", "count"],
                 "default": "files_with_matches",
             },
             "-i": {"type": "boolean", "description": "Case insensitive", "default": False},
-            "-C": {"type": "integer", "description": "Context lines around each match", "default": 0},
+            "-n": {"type": "boolean", "description": "Show line numbers", "default": True},
+            "-A": {"type": "integer", "description": "Lines to show after each match"},
+            "-B": {"type": "integer", "description": "Lines to show before each match"},
+            "-C": {"type": "integer", "description": "Context lines around each match"},
+            "multiline": {"type": "boolean", "description": "Enable multiline mode", "default": False},
+            "head_limit": {"type": "integer", "description": "Limit output to first N lines/entries", "default": 250},
+            "offset": {"type": "integer", "description": "Skip first N lines/entries", "default": 0},
         },
         "required": ["pattern"],
     }
@@ -54,18 +61,55 @@ class GrepTool(Tool):
         cmd = ["rg", "--no-heading"]
         if kwargs.get("-i"):
             cmd.append("-i")
-        context = kwargs.get("-C", 0)
-        if context:
+        if kwargs.get("multiline"):
+            cmd.extend(["-U", "--multiline-dotall"])
+        # Context lines
+        after = kwargs.get("-A")
+        before = kwargs.get("-B")
+        context = kwargs.get("-C")
+        if after and output_mode == "content":
+            cmd.extend(["-A", str(after)])
+        if before and output_mode == "content":
+            cmd.extend(["-B", str(before)])
+        if context and output_mode == "content":
             cmd.extend(["-C", str(context)])
-        cmd.append("-l" if output_mode == "files_with_matches" else "-n")
+        # Output mode flags
+        if output_mode == "files_with_matches":
+            cmd.append("-l")
+        elif output_mode == "count":
+            cmd.append("-c")
+        else:
+            show_line_numbers = kwargs.get("-n", True)
+            if show_line_numbers:
+                cmd.append("-n")
+        # Filters
         if glob:
             cmd.extend(["-g", glob])
+        file_type = kwargs.get("type")
+        if file_type:
+            cmd.extend(["--type", file_type])
         cmd.extend([pattern, path])
+
+        head_limit = kwargs.get("head_limit", 250) or 250
+        offset = kwargs.get("offset", 0) or 0
 
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
             output = result.stdout.strip()
-            return ToolResult(content=output if output else "No matches found.")
+            if not output:
+                return ToolResult(content="No matches found.")
+            # Apply offset and head_limit
+            lines = output.split("\n")
+            if offset > 0:
+                lines = lines[offset:]
+            if head_limit > 0:
+                truncated = len(lines) > head_limit
+                lines = lines[:head_limit]
+                result_text = "\n".join(lines)
+                if truncated:
+                    result_text += f"\n\n... (results truncated, showing {head_limit} of {len(output.split(chr(10)))} entries)"
+                return ToolResult(content=result_text)
+            return ToolResult(content="\n".join(lines))
         except FileNotFoundError:
             return self._python_grep(pattern, path, glob, kwargs.get("-i", False), output_mode)
         except subprocess.TimeoutExpired:

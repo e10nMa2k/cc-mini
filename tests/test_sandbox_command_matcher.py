@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from core.sandbox.command_matcher import (
+from features.sandbox.command_matcher import (
     RuleType,
     parse_rule,
     matches_rule,

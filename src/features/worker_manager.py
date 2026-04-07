@@ -8,7 +8,7 @@ from queue import Empty, Queue
 from typing import Callable
 from xml.sax.saxutils import escape
 
-from .engine import AbortedError
+from core.engine import AbortedError
 
 
 @dataclass

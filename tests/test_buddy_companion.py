@@ -1,5 +1,5 @@
 """Tests for buddy companion generation (Phase 1)."""
-from core.buddy.companion import (
+from buddy.companion import (
     hash_string,
     mulberry32,
     pick,
@@ -8,7 +8,7 @@ from core.buddy.companion import (
     roll_stats,
     roll_with_seed,
 )
-from core.buddy.types import (
+from buddy.types import (
     RARITIES,
     RARITY_FLOOR,
     RARITY_WEIGHTS,

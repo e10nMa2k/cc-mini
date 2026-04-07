@@ -1,100 +1,55 @@
 from __future__ import annotations
+import random
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import TYPE_CHECKING, Any, Iterator
 from .config import DEFAULT_MODEL, default_max_tokens_for_model, resolve_model
 from .llm import LLMClient
-from .tools.base import Tool, ToolResult
+from .tool import Tool, ToolResult
 from .permissions import PermissionChecker
 
 if TYPE_CHECKING:
-    from .cost_tracker import CostTracker
+    from features.cost_tracker import CostTracker
     from .session import SessionStore
 
-_MAX_RETRIES = 3
-_RETRY_BACKOFF = (1, 3, 10)
+_MAX_RETRIES = 10
+_BASE_DELAY = 0.5
+_MAX_DELAY = 32.0
+_JITTER_FACTOR = 0.25
+
+
+def _compute_retry_delay(attempt: int, retry_after: float | None = None) -> float:
+    """Exponential backoff with jitter, respecting Retry-After if present."""
+    if retry_after is not None and retry_after > 0:
+        return retry_after
+    delay = min(_BASE_DELAY * (2 ** attempt), _MAX_DELAY)
+    jitter = delay * random.uniform(0, _JITTER_FACTOR)
+    return delay + jitter
+
+
+def _parse_retry_after(exc: Exception) -> float | None:
+    """Extract Retry-After value from API error headers, if available."""
+    headers = getattr(getattr(exc, "response", None), "headers", None)
+    if headers is None:
+        return None
+    raw = headers.get("retry-after") or headers.get("Retry-After")
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except (ValueError, TypeError):
+        return None
+
+
+_CONTEXT_OVERFLOW_RE = re.compile(
+    r"prompt is too long|max_tokens.*exceeds.*context|input.*too large",
+    re.IGNORECASE,
+)
 
 
 class AbortedError(Exception):
     """Raised when the current turn is aborted by the user (Esc / Ctrl+C)."""
-
-
-def _normalize_content_block(block: Any) -> dict[str, Any]:
-    """Convert SDK content blocks into plain API dictionaries.
-
-    Anthropic-compatible backends can reject SDK-specific object fields that
-    are harmless against Anthropic's own endpoint, so only persist the wire
-    fields we actually want to send back.
-    """
-    if isinstance(block, dict):
-        normalized = dict(block)
-    else:
-        normalized = {}
-        for field in (
-            "type", "text", "id", "name", "input", "tool_use_id",
-            "content", "is_error", "source",
-        ):
-            if hasattr(block, field):
-                normalized[field] = getattr(block, field)
-
-    block_type = normalized.get("type")
-    if block_type == "text":
-        return {"type": "text", "text": normalized.get("text", "")}
-    if block_type == "tool_use":
-        return {
-            "type": "tool_use",
-            "id": normalized.get("id", ""),
-            "name": normalized.get("name", ""),
-            "input": _normalize_json_value(normalized.get("input", {})),
-        }
-    if block_type == "tool_result":
-        result = {
-            "type": "tool_result",
-            "tool_use_id": normalized.get("tool_use_id", ""),
-            "content": _normalize_json_value(normalized.get("content", "")),
-        }
-        if "is_error" in normalized:
-            result["is_error"] = bool(normalized["is_error"])
-        return result
-    if block_type == "image":
-        return {
-            "type": "image",
-            "source": _normalize_json_value(normalized.get("source", {})),
-        }
-    return {
-        key: _normalize_json_value(value)
-        for key, value in normalized.items()
-        if value is not None
-    }
-
-
-def _normalize_json_value(value: Any) -> Any:
-    if isinstance(value, (str, int, float, bool)) or value is None:
-        return value
-    if isinstance(value, dict):
-        return {str(k): _normalize_json_value(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_normalize_json_value(item) for item in value]
-    if hasattr(value, "model_dump"):
-        return _normalize_json_value(value.model_dump())
-    if hasattr(value, "dict"):
-        return _normalize_json_value(value.dict())
-    if hasattr(value, "__dict__"):
-        data = {
-            key: val for key, val in vars(value).items()
-            if not key.startswith("_") and not callable(val)
-        }
-        if data:
-            return _normalize_json_value(data)
-    return value
-
-
-def _normalize_message_content(content: Any) -> Any:
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        return [_normalize_content_block(block) for block in content]
-    return _normalize_json_value(content)
 
 
 class Engine:
@@ -139,13 +94,10 @@ class Engine:
         self._messages = [
             {
                 "role": message["role"],
-                "content": _normalize_message_content(message.get("content", "")),
+                "content": message.get("content", ""),
             }
             for message in messages
         ]
-
-    def get_system_prompt(self) -> str:
-        return self._system_prompt
 
     def set_session_store(self, store: SessionStore | None) -> None:
         self._session_store = store
@@ -170,14 +122,6 @@ class Engine:
                 self._session_store.append_message(message)
             except Exception:
                 pass  # don't break the conversation on I/O errors
-
-    @property
-    def messages(self) -> list[dict]:
-        return self._messages
-
-    @messages.setter
-    def messages(self, value: list[dict]) -> None:
-        self._messages = value
 
     @property
     def system_prompt(self) -> str:
@@ -250,7 +194,7 @@ class Engine:
         self._turn_start_len = len(self._messages)
         self._messages.append({
             "role": "user",
-            "content": _normalize_message_content(user_input),
+            "content": user_input,
         })
         self._persist(self._messages[-1])
 
@@ -266,15 +210,16 @@ class Engine:
                 for attempt in range(_MAX_RETRIES):
                     try:
                         _api_t0 = time.monotonic()
-                        with self._client.stream_messages(
+                        stream_obj = self._client.stream_messages(
                             model=self._model,
                             max_tokens=self._max_tokens,
                             system=self._system_prompt,
                             tools=[t.to_api_schema() for t in self._tools.values()],
                             messages=self._messages,
                             effort=self._effort,
-                        ) as stream:
-                            self._active_stream = stream
+                        )
+                        self._active_stream = stream_obj
+                        with stream_obj as stream:
                             got_text = False
                             for text in stream.text_stream:
                                 if self._aborted:
@@ -310,19 +255,32 @@ class Engine:
                             self._messages.pop()
                             yield ("error", f"Authentication failed: {self._client.error_message(e)}")
                             return
+                        # Context overflow: reduce max_tokens and retry
+                        err_msg = self._client.error_message(e)
+                        if self._client.is_api_error(e) and _CONTEXT_OVERFLOW_RE.search(err_msg):
+                            reduced = self._max_tokens // 2
+                            if reduced >= 1024:
+                                self._max_tokens = reduced
+                                yield ("error", f"Context overflow, reducing max_tokens to {reduced} and retrying...")
+                                continue
+                            else:
+                                self._messages.pop()
+                                yield ("error", f"Context overflow and cannot reduce further: {err_msg}")
+                                return
                         if self._client.is_retryable_error(e):
                             if attempt < _MAX_RETRIES - 1:
-                                wait = _RETRY_BACKOFF[attempt]
-                                yield ("error", f"API error, retrying in {wait}s... ({self._client.error_message(e)})")
+                                retry_after = _parse_retry_after(e)
+                                wait = _compute_retry_delay(attempt, retry_after)
+                                yield ("error", f"API error, retrying in {wait:.1f}s... ({err_msg})")
                                 time.sleep(wait)
                             else:
                                 self._messages.pop()
-                                yield ("error", f"API error after {_MAX_RETRIES} retries: {self._client.error_message(e)}")
+                                yield ("error", f"API error after {_MAX_RETRIES} retries: {err_msg}")
                                 return
                             continue
                         if self._client.is_api_error(e):
                             self._messages.pop()
-                            yield ("error", f"API error: {self._client.error_message(e)}")
+                            yield ("error", f"API error: {err_msg}")
                             return
                         if self._aborted:
                             raise AbortedError()
@@ -336,7 +294,7 @@ class Engine:
 
                 self._messages.append({
                     "role": "assistant",
-                    "content": _normalize_message_content(final.content),
+                    "content": final.content,
                 })
                 self._persist(self._messages[-1])
 
@@ -440,7 +398,7 @@ class Engine:
 
                 self._messages.append({
                     "role": "user",
-                    "content": _normalize_message_content(tool_results),
+                    "content": tool_results,
                 })
                 self._persist(self._messages[-1])
         except AbortedError:

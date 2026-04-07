@@ -9,9 +9,11 @@ def test_build_system_prompt_contains_base_instructions():
     assert "tools" in prompt.lower()
 
 
-def test_build_system_prompt_contains_date():
+def test_build_system_prompt_contains_env_info():
     prompt = build_system_prompt(cwd="/tmp")
-    assert "Today's date:" in prompt
+    assert "Primary working directory: /tmp" in prompt
+    assert "Platform:" in prompt
+    assert "Shell:" in prompt
 
 
 def test_build_system_prompt_contains_working_directory():

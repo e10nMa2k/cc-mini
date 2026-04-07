@@ -3,12 +3,12 @@ import os
 import sys
 import select
 from typing import Literal, TYPE_CHECKING
-from .tools.base import Tool
+from .tool import Tool
 
 if TYPE_CHECKING:
-    from ._keylistener import EscListener
-    from .sandbox.manager import SandboxManager
-    from .plan import PlanModeManager
+    from tui.keylistener import EscListener
+    from features.sandbox.manager import SandboxManager
+    from features.plan import PlanModeManager
 
 PermissionBehavior = Literal["allow", "deny"]
 

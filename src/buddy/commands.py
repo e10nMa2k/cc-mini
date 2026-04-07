@@ -20,7 +20,7 @@ import uuid
 from rich.console import Console
 from rich.live import Live
 from rich.text import Text
-from ..llm import LLMClient
+from core.llm import LLMClient
 
 from .companion import companion_user_id, get_companion, get_all_companions, roll, roll_with_seed
 from .render import render_companion_card, render_hatch_animation, render_compact_status, render_companion_list

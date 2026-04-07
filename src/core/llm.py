@@ -25,6 +25,37 @@ _ANTHROPIC_PROVIDER = "anthropic"
 _OPENAI_PROVIDER = "openai"
 _VALID_PROVIDERS = {_ANTHROPIC_PROVIDER, _OPENAI_PROVIDER}
 
+MODEL_CONTEXT_WINDOW_DEFAULT = 200_000
+
+def get_context_window_for_model(model: str) -> int:
+    """Return the context window size for a given model."""
+    lowered = model.lower()
+    if "[1m]" in lowered or "1m" in lowered.split("-"):
+        return 1_000_000
+    return MODEL_CONTEXT_WINDOW_DEFAULT
+
+
+# Upper limit for max output tokens — used for auto-escalation scenarios.
+_MODEL_MAX_OUTPUT_UPPER: dict[str, int] = {
+    "claude-opus-4-6": 64000,
+    "claude-sonnet-4-6": 64000,
+    "claude-opus-4-5": 64000,
+    "claude-sonnet-4-5": 64000,
+    "claude-sonnet-4": 64000,
+    "claude-opus-4-1": 64000,
+    "claude-opus-4": 64000,
+    "claude-3-7-sonnet": 64000,
+    "claude-3-5-sonnet": 8192,
+    "claude-3-5-haiku": 8192,
+}
+
+def get_max_output_tokens_upper(model: str) -> int | None:
+    """Return the upper limit of output tokens for a model, if known."""
+    for prefix, limit in _MODEL_MAX_OUTPUT_UPPER.items():
+        if model.startswith(prefix):
+            return limit
+    return None
+
 
 @dataclass
 class LLMUsage:
@@ -51,7 +82,7 @@ def default_model_for_provider(provider: str) -> str:
     provider = validate_provider(provider)
     if provider == _OPENAI_PROVIDER:
         return "gpt-5.1-codex"
-    return "claude-sonnet-4-20250514"
+    return "claude-sonnet-4-6"
 
 
 def default_companion_model(provider: str, model: str) -> str:
@@ -94,7 +125,11 @@ class LLMClient:
                 raise ValueError(message)
             self._client = OpenAI(api_key=api_key, base_url=base_url)
         else:
-            self._client = anthropic.Anthropic(api_key=api_key, base_url=base_url)
+            self._client = anthropic.Anthropic(
+                api_key=api_key,
+                base_url=base_url,
+                timeout=httpx.Timeout(600.0, connect=30.0),
+            )
 
     def create_message(
         self,
@@ -263,15 +298,18 @@ class _AnthropicStream:
 
     def __enter__(self):
         self._ctx = self._raw.__enter__()
-        self.text_stream = iter(self._ctx.text_stream)
+        self.text_stream = self._ctx.text_stream
         return self
 
     def __exit__(self, exc_type, exc, tb):
         return self._raw.__exit__(exc_type, exc, tb)
 
     def close(self) -> None:
-        if self._ctx is not None and hasattr(self._ctx, "close"):
-            self._ctx.close()
+        """Signal cancellation — best-effort close of the underlying stream."""
+        try:
+            self._raw.close()
+        except Exception:
+            pass
 
     def get_final_message(self) -> LLMMessage:
         final = self._ctx.get_final_message()

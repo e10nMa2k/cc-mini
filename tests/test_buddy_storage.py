@@ -1,13 +1,13 @@
 """Tests for buddy persistence (Phase 2)."""
 import json
 
-from core.buddy.storage import (
+from buddy.storage import (
     load_companion_muted,
     load_stored_companion,
     save_companion_muted,
     save_stored_companion,
 )
-from core.buddy.types import CompanionSoul
+from buddy.types import CompanionSoul
 
 
 class TestStorage:
@@ -41,20 +41,20 @@ class TestStorage:
 
 
 class TestMuted:
-    def test_default_not_muted(self, tmp_path):
+    def test_default_muted(self, tmp_path):
         fp = tmp_path / "companion.json"
-        assert load_companion_muted(path=fp) is False
+        assert load_companion_muted(path=fp) is True
 
     def test_mute_toggle(self, tmp_path):
         fp = tmp_path / "companion.json"
         soul = CompanionSoul(name="Ghost", personality="Spooky")
         save_stored_companion(soul, path=fp)
 
-        assert load_companion_muted(path=fp) is False
-        save_companion_muted(True, path=fp)
         assert load_companion_muted(path=fp) is True
         save_companion_muted(False, path=fp)
         assert load_companion_muted(path=fp) is False
+        save_companion_muted(True, path=fp)
+        assert load_companion_muted(path=fp) is True
 
     def test_mute_preserves_data(self, tmp_path):
         fp = tmp_path / "companion.json"

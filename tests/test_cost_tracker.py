@@ -1,7 +1,7 @@
 """Tests for CostTracker."""
 
 import pytest
-from core.cost_tracker import CostTracker, _tier_for_model, _fmt_tokens, _fmt_duration
+from features.cost_tracker import CostTracker, _tier_for_model, _fmt_tokens, _fmt_duration
 
 
 # ---------------------------------------------------------------------------

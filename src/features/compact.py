@@ -6,7 +6,7 @@ Modelled after claude-code's ``src/services/compact/compact.ts``.
 from __future__ import annotations
 
 from typing import Any
-from .llm import LLMClient
+from core.llm import LLMClient
 
 # ---------------------------------------------------------------------------
 # Constants

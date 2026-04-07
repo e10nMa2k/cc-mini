@@ -1,7 +1,7 @@
 import time
 
 from core.engine import AbortedError
-from core.worker_manager import WorkerManager
+from features.worker_manager import WorkerManager
 
 
 class _FakeUsage:

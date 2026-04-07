@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from core.sandbox.config import (
+from features.sandbox.config import (
     SandboxConfig,
     SandboxFilesystemConfig,
     load_sandbox_config,

@@ -3,7 +3,7 @@
 Supports multiple companions. The JSON structure is:
 {
   "active": 0,
-  "muted": false,
+  "muted": true,
   "companions": [
     {"name": "...", "personality": "...", "hatchedAt": ..., "seed": "..."},
     ...
@@ -57,7 +57,7 @@ def _migrate_if_needed(data: dict, default_seed: str, path: Path | None = None) 
 
     new_data = {
         "active": 0,
-        "muted": data.get("muted", False),
+        "muted": data.get("muted", True),
         "companions": [
             {
                 "name": data["name"],
@@ -141,7 +141,7 @@ def save_stored_companion(
     else:
         data = {
             "active": 0,
-            "muted": False,
+            "muted": True,
             "companions": [entry],
         }
     _write_data(data, fp)
@@ -167,7 +167,7 @@ def save_new_companion(
 
     data = _read_data(fp)
     if data is None:
-        data = {"active": 0, "muted": False, "companions": []}
+        data = {"active": 0, "muted": True, "companions": []}
     elif "companions" not in data:
         data = _migrate_if_needed(data, _default_seed(), fp)
 
@@ -229,9 +229,9 @@ def load_companion_muted(path: Path | None = None) -> bool:
     """Check if companion reactions are muted."""
     data = _read_data(path)
     if data is None:
-        return False
+        return True
     data = _migrate_if_needed(data, _default_seed(), path)
-    return bool(data.get("muted", False))
+    return bool(data.get("muted", True))
 
 
 def save_companion_muted(muted: bool, path: Path | None = None) -> None:

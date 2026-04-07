@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from .base import Tool, ToolResult
+from core.tool import Tool, ToolResult
 
 
 class FileEditTool(Tool):
@@ -33,6 +33,15 @@ class FileEditTool(Tool):
         "required": ["file_path", "old_string", "new_string"],
     }
 
+    # Shared set of files that have been read — populated by FileReadTool
+    _read_files: set[str] = set()
+
+    _MAX_FILE_SIZE = 1 * 1024 * 1024 * 1024  # 1 GiB
+
+    @classmethod
+    def mark_file_read(cls, file_path: str) -> None:
+        cls._read_files.add(file_path)
+
     def get_activity_description(self, **kwargs) -> str | None:
         file_path = kwargs.get("file_path", "")
         return f"Editing {file_path}" if file_path else None
@@ -42,6 +51,20 @@ class FileEditTool(Tool):
         path = Path(file_path)
         if not path.exists():
             return ToolResult(content=f"Error: File not found: {file_path}", is_error=True)
+
+        # Enforce read-before-write
+        if file_path not in self._read_files and str(path.resolve()) not in self._read_files:
+            return ToolResult(
+                content=f"Error: You must read {file_path} before editing it. Use the Read tool first.",
+                is_error=True,
+            )
+
+        # File size check
+        try:
+            if path.stat().st_size > self._MAX_FILE_SIZE:
+                return ToolResult(content=f"Error: File too large to edit", is_error=True)
+        except OSError:
+            pass
         try:
             content = path.read_text(encoding="utf-8")
         except OSError as e:

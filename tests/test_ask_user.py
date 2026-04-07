@@ -2,7 +2,7 @@
 
 import pytest
 from unittest.mock import patch, MagicMock
-from core.tools.ask_user import AskUserQuestionTool, _select_one, _select_multi
+from tools.ask_user import AskUserQuestionTool, _select_one, _select_multi
 
 
 @pytest.fixture
@@ -39,7 +39,7 @@ def test_api_schema(tool):
 # ---------------------------------------------------------------------------
 
 def test_single_select(tool):
-    with patch("core.tools.ask_user._select_one", return_value="Python"):
+    with patch("tools.ask_user._select_one", return_value="Python"):
         result = tool.execute(questions=[{
             "question": "Pick a language?",
             "options": [
@@ -54,7 +54,7 @@ def test_single_select(tool):
 
 def test_single_select_other(tool):
     # When user types custom text on "Other", _select_one returns that text directly
-    with patch("core.tools.ask_user._select_one", return_value="Haskell"):
+    with patch("tools.ask_user._select_one", return_value="Haskell"):
         result = tool.execute(questions=[{
             "question": "Pick a language?",
             "options": [
@@ -67,7 +67,7 @@ def test_single_select_other(tool):
 
 
 def test_single_select_cancel(tool):
-    with patch("core.tools.ask_user._select_one", return_value=None):
+    with patch("tools.ask_user._select_one", return_value=None):
         result = tool.execute(questions=[{
             "question": "Pick?",
             "options": [
@@ -84,7 +84,7 @@ def test_single_select_cancel(tool):
 # ---------------------------------------------------------------------------
 
 def test_multi_select(tool):
-    with patch("core.tools.ask_user._select_multi", return_value=["Python", "Go"]):
+    with patch("tools.ask_user._select_multi", return_value=["Python", "Go"]):
         result = tool.execute(questions=[{
             "question": "Pick languages?",
             "options": [
@@ -100,7 +100,7 @@ def test_multi_select(tool):
 
 def test_multi_select_with_other(tool):
     # _select_multi now returns typed text directly (not "Other" label)
-    with patch("core.tools.ask_user._select_multi", return_value=["Python", "Zig"]):
+    with patch("tools.ask_user._select_multi", return_value=["Python", "Zig"]):
         result = tool.execute(questions=[{
             "question": "Pick languages?",
             "options": [
@@ -115,7 +115,7 @@ def test_multi_select_with_other(tool):
 
 
 def test_multi_select_cancel(tool):
-    with patch("core.tools.ask_user._select_multi", return_value=None):
+    with patch("tools.ask_user._select_multi", return_value=None):
         result = tool.execute(questions=[{
             "question": "Pick?",
             "options": [
@@ -133,7 +133,7 @@ def test_multi_select_cancel(tool):
 
 def test_multiple_questions(tool):
     select_results = iter(["Python", "React"])
-    with patch("core.tools.ask_user._select_one", side_effect=select_results):
+    with patch("tools.ask_user._select_one", side_effect=select_results):
         result = tool.execute(questions=[
             {
                 "question": "Language?",

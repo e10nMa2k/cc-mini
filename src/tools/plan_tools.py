@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from .base import Tool, ToolResult
+from core.tool import Tool, ToolResult
 
 if TYPE_CHECKING:
     from ..plan import PlanModeManager

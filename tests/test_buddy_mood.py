@@ -1,11 +1,11 @@
 """Tests for buddy mood system."""
-from core.buddy.mood import apply_decay, apply_events, classify_events, describe_mood
-from core.buddy.storage import (
+from buddy.mood import apply_decay, apply_events, classify_events, describe_mood
+from buddy.storage import (
     load_active_mood,
     save_active_mood,
     save_stored_companion,
 )
-from core.buddy.types import CompanionMood, MOOD_DIMENSIONS, MOOD_NEUTRAL, CompanionSoul
+from buddy.types import CompanionMood, MOOD_DIMENSIONS, MOOD_NEUTRAL, CompanionSoul
 
 
 # ---------------------------------------------------------------------------
@@ -226,7 +226,7 @@ class TestMoodStorage:
         save_stored_companion(soul, path=fp)
         save_active_mood(CompanionMood(happy=75), path=fp)
 
-        from core.buddy.storage import load_stored_companion
+        from buddy.storage import load_stored_companion
         loaded = load_stored_companion(path=fp)
         assert loaded is not None
         assert loaded.name == "Ghost"

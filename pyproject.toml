@@ -18,10 +18,10 @@ dependencies = [
 dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
 
 [project.scripts]
-cc-mini = "core.main:main"
+cc-mini = "tui.app:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/core"]
+packages = ["src/core", "src/services", "src/features", "src/tui", "src/commands", "src/buddy", "src/sandbox"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

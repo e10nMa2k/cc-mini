@@ -3,7 +3,7 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from core.plan import PlanModeManager, _get_plans_dir
+from features.plan import PlanModeManager, _get_plans_dir
 
 
 class TestPlanDir:

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from core.skills import (
+from features.skills import (
     Skill,
     _parse_frontmatter,
     _skill_from_frontmatter,
@@ -17,7 +17,7 @@ from core.skills import (
     load_skills_from_dir,
     register_skill,
 )
-from core.skills_bundled import register_bundled_skills
+from features.skills_bundled import register_bundled_skills
 
 
 @pytest.fixture(autouse=True)
@@ -329,9 +329,9 @@ class TestPromptSection:
 class TestAutocomplete:
     def _completions(self, text: str) -> list[str]:
         from prompt_toolkit.document import Document
-        from core.main import _SlashCommandCompleter
+        from tui.prompt import SlashCommandCompleter
         doc = Document(text, cursor_position=len(text))
-        return [c.text for c in _SlashCommandCompleter().get_completions(doc, None)]
+        return [c.text for c in SlashCommandCompleter().get_completions(doc, None)]
 
     def test_slash_s_includes_skills_and_simplify(self):
         register_bundled_skills()
@@ -370,11 +370,11 @@ class TestAutocomplete:
 
 class TestCommandParsing:
     def test_skill_as_slash_command(self):
-        from core.commands import parse_command
+        from commands import parse_command
         assert parse_command("/simplify") == ("simplify", "")
         assert parse_command("/simplify security") == ("simplify", "security")
         assert parse_command("/commit fix bug") == ("commit", "fix bug")
 
     def test_non_slash_not_parsed(self):
-        from core.commands import parse_command
+        from commands import parse_command
         assert parse_command("hello") is None

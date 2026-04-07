@@ -1,9 +1,9 @@
 from unittest.mock import patch
 import os
 from core.permissions import PermissionChecker
-from core.tools.file_read import FileReadTool
-from core.tools.bash import BashTool
-from core.tools.file_edit import FileEditTool
+from tools.file_read import FileReadTool
+from tools.bash import BashTool
+from tools.file_edit import FileEditTool
 
 
 def test_read_only_tool_always_allowed():

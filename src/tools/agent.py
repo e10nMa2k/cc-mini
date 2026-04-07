@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import json
 
-from .base import Tool, ToolResult
-from ..worker_manager import WorkerManager
+from core.tool import Tool, ToolResult
+from features.worker_manager import WorkerManager
 
 
 class AgentTool(Tool):

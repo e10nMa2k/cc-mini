@@ -3,10 +3,10 @@ from __future__ import annotations
 import subprocess
 from typing import TYPE_CHECKING
 
-from .base import Tool, ToolResult
+from core.tool import Tool, ToolResult
 
 if TYPE_CHECKING:
-    from ..sandbox.manager import SandboxManager
+    from features.sandbox.manager import SandboxManager
 
 _DEFAULT_TIMEOUT = 120
 
@@ -56,6 +56,10 @@ class BashTool(Tool):
         "type": "object",
         "properties": {
             "command": {"type": "string", "description": "The bash command to execute"},
+            "description": {
+                "type": "string",
+                "description": "Clear, concise description of what this command does in active voice",
+            },
             "timeout": {"type": "integer", "description": "Timeout in seconds", "default": 120},
             "dangerously_disable_sandbox": {
                 "type": "boolean",
@@ -77,6 +81,7 @@ class BashTool(Tool):
     def execute(
         self,
         command: str,
+        description: str = "",
         timeout: int = _DEFAULT_TIMEOUT,
         dangerously_disable_sandbox: bool = False,
     ) -> ToolResult:
@@ -95,7 +100,11 @@ class BashTool(Tool):
             )
             parts = []
             if result.stdout:
-                parts.append(result.stdout.rstrip())
+                stdout = result.stdout.rstrip()
+                # Truncate very long output
+                if len(stdout) > 10_000:
+                    stdout = stdout[:10_000] + "\n\n... (output truncated, full output was {0} chars)".format(len(result.stdout.rstrip()))
+                parts.append(stdout)
             if result.stderr:
                 parts.append(f"[stderr]\n{result.stderr.rstrip()}")
             if result.returncode != 0:

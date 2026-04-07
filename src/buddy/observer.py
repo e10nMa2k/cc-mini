@@ -13,7 +13,7 @@ from __future__ import annotations
 import threading
 from typing import Callable
 
-from ..llm import LLMClient
+from core.llm import LLMClient
 from .types import Companion
 
 _MAX_RESPONSE_PREVIEW = 500

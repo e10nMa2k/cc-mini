@@ -8,9 +8,9 @@ from pathlib import Path
 
 import pytest
 
-from core.sandbox.config import SandboxConfig, SandboxFilesystemConfig
-from core.sandbox.manager import SandboxManager
-from core.sandbox.wrapper import build_bwrap_args, wrap_command
+from features.sandbox.config import SandboxConfig, SandboxFilesystemConfig
+from features.sandbox.manager import SandboxManager
+from features.sandbox.wrapper import build_bwrap_args, wrap_command
 
 pytestmark = pytest.mark.skipif(
     not shutil.which("bwrap"),

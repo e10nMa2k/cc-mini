@@ -7,9 +7,9 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-from core.sandbox.config import SandboxConfig
-from core.sandbox.checker import DependencyCheck
-from core.sandbox.manager import SandboxManager
+from features.sandbox.config import SandboxConfig
+from features.sandbox.checker import DependencyCheck
+from features.sandbox.manager import SandboxManager
 
 
 class TestIsEnabled:
@@ -21,7 +21,7 @@ class TestIsEnabled:
         cfg = SandboxConfig(enabled=True)
         mgr = SandboxManager(config=cfg)
         monkeypatch.setattr(
-            "core.sandbox.manager.check_dependencies",
+            "features.sandbox.manager.check_dependencies",
             lambda: DependencyCheck(),
         )
         assert mgr.is_enabled() is True
@@ -30,7 +30,7 @@ class TestIsEnabled:
         cfg = SandboxConfig(enabled=True)
         mgr = SandboxManager(config=cfg)
         monkeypatch.setattr(
-            "core.sandbox.manager.check_dependencies",
+            "features.sandbox.manager.check_dependencies",
             lambda: DependencyCheck(errors=["bwrap missing"]),
         )
         assert mgr.is_enabled() is False
@@ -56,7 +56,7 @@ class TestShouldSandbox:
         )
         mgr = SandboxManager(config=cfg)
         monkeypatch.setattr(
-            "core.sandbox.manager.check_dependencies",
+            "features.sandbox.manager.check_dependencies",
             lambda: DependencyCheck(),
         )
         return mgr
@@ -81,7 +81,7 @@ class TestShouldSandbox:
         cfg = SandboxConfig(enabled=True, allow_unsandboxed=True)
         mgr = SandboxManager(config=cfg)
         monkeypatch.setattr(
-            "core.sandbox.manager.check_dependencies",
+            "features.sandbox.manager.check_dependencies",
             lambda: DependencyCheck(),
         )
         assert mgr.should_sandbox("rm -rf /", dangerously_disable=True) is False
@@ -90,7 +90,7 @@ class TestShouldSandbox:
         cfg = SandboxConfig(enabled=True, allow_unsandboxed=False)
         mgr = SandboxManager(config=cfg)
         monkeypatch.setattr(
-            "core.sandbox.manager.check_dependencies",
+            "features.sandbox.manager.check_dependencies",
             lambda: DependencyCheck(),
         )
         assert mgr.should_sandbox("rm -rf /", dangerously_disable=True) is True
@@ -145,7 +145,7 @@ class TestDepCheckCache:
             return DependencyCheck()
 
         monkeypatch.setattr(
-            "core.sandbox.manager.check_dependencies", counting_check
+            "features.sandbox.manager.check_dependencies", counting_check
         )
         mgr = SandboxManager(config=SandboxConfig(enabled=True))
         mgr.check_dependencies()

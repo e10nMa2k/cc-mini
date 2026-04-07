@@ -29,7 +29,8 @@ The entire core is `~1000 lines of Python`
 
 - **Interactive REPL** with streaming output, command history, slash command autocomplete
 - **Agentic tool loop** — Claude calls tools autonomously until the task is complete
-- **6 built-in tools**: `Read`, `Edit`, `Write`, `Glob`, `Grep`, `Bash`
+- **9 built-in tools**: `Read`, `Edit`, `Write`, `Glob`, `Grep`, `Bash`, `AskUser`, `EnterPlanMode`, `ExitPlanMode`
+- **Plan mode** — explore codebase and design approach before implementing
 - **Permission system** — reads auto-approved, writes/bash ask for confirmation
 - **Session persistence** — auto-save conversations, `/resume` to continue later
 - **Context compression** — auto-compact when approaching token limits
@@ -132,6 +133,9 @@ Running skill: /review…
 | `Edit` | Edit file (string replacement) | requires confirmation |
 | `Write` | Write/create file | requires confirmation |
 | `Bash` | Run shell command | requires confirmation |
+| `AskUser` | Ask user a question | auto-approved |
+| `EnterPlanMode` | Enter plan mode | auto-approved |
+| `ExitPlanMode` | Exit plan mode | auto-approved |
 
 Coordinator mode adds: `Agent` (spawn worker), `SendMessage` (continue worker), `TaskStop` (stop worker). See [coordinator docs](docs/coordinator.md).
 
@@ -161,26 +165,49 @@ Type `/` to see autocomplete suggestions.
 ## Project Structure
 
 ```
-src/core/
-├── main.py           # CLI entry point + REPL
-├── engine.py         # Streaming API loop + tool execution
-├── llm.py            # LLM client (Anthropic + OpenAI)
-├── config.py         # Configuration (CLI, env, TOML)
-├── context.py        # System prompt builder
-├── commands.py       # Slash command system
-├── session.py        # Session persistence
-├── compact.py        # Context compression
-├── coordinator.py    # Coordinator mode
-├── worker_manager.py # Background worker lifecycle
-├── skills.py         # Skill loader and registry
-├── skills_bundled.py # Built-in skills (simplify, review, commit, test)
-├── memory.py         # KAIROS memory system
-├── permissions.py    # Permission checker
-├── cost_tracker.py   # Token usage tracking
-├── _keylistener.py   # Esc/Ctrl+C detection
-├── sandbox/          # Bubblewrap sandbox subsystem
-├── tools/            # Tool implementations
-└── buddy/            # AI companion pet system
+src/
+├── core/                  # Pure harness — engine, LLM, config
+│   ├── engine.py          # Streaming API loop + tool execution
+│   ├── llm.py             # LLM client (Anthropic + OpenAI)
+│   ├── config.py          # Configuration (CLI, env, TOML)
+│   ├── context.py         # System prompt builder
+│   ├── tool.py            # Base Tool protocol + ToolResult
+│   ├── permissions.py     # Permission checker
+│   └── session.py         # Session persistence
+│
+├── tools/                 # Tool implementations (one per file)
+│   ├── bash.py            # Shell command execution
+│   ├── file_read.py       # Read files
+│   ├── file_edit.py       # Edit files (string replacement)
+│   ├── file_write.py      # Write/create files
+│   ├── glob_tool.py       # Find files by pattern
+│   ├── grep_tool.py       # Search file contents
+│   ├── ask_user.py        # Ask user questions
+│   ├── plan_tools.py      # EnterPlanMode / ExitPlanMode
+│   └── agent.py           # Coordinator agent tools
+│
+├── features/              # Pluggable capabilities
+│   ├── compact.py         # Context compression
+│   ├── coordinator.py     # Coordinator mode
+│   ├── worker_manager.py  # Background worker lifecycle
+│   ├── cost_tracker.py    # Token usage tracking
+│   ├── memory.py          # KAIROS memory system
+│   ├── plan.py            # Plan mode logic
+│   ├── skills.py          # Skill loader and registry
+│   ├── skills_bundled.py  # Built-in skills (review, commit, test, simplify)
+│   └── sandbox/           # Bubblewrap sandbox subsystem
+│
+├── tui/                   # Terminal UI
+│   ├── app.py             # CLI entry point + REPL
+│   ├── query.py           # Query submission + streaming display
+│   ├── rendering.py       # Rich console rendering
+│   ├── prompt.py          # Input prompt
+│   ├── input_parser.py    # Input parsing
+│   ├── shell.py           # Shell integration
+│   └── keylistener.py     # Esc/Ctrl+C detection
+│
+├── commands/              # Slash command handlers
+└── buddy/                 # AI companion pet system
 ```
 
 ## Running Tests

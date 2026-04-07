@@ -1,7 +1,7 @@
 from unittest.mock import MagicMock, patch
 from core.engine import Engine
 from core.config import default_max_tokens_for_model
-from core.tools.base import Tool, ToolResult
+from core.tool import Tool, ToolResult
 from core.permissions import PermissionChecker
 
 
@@ -28,12 +28,12 @@ def _make_engine(auto_approve=True):
 
 def _make_text_response(text: str):
     """Simulate an API response with just text (no tool calls)."""
-    block = MagicMock()
-    block.type = "text"
-    block.text = text
+    from core.llm import LLMMessage, LLMUsage
 
-    final_msg = MagicMock()
-    final_msg.content = [block]
+    final_msg = LLMMessage(
+        content=[{"type": "text", "text": text}],
+        usage=LLMUsage(),
+    )
 
     stream = MagicMock()
     stream.__enter__ = MagicMock(return_value=stream)
@@ -45,14 +45,17 @@ def _make_text_response(text: str):
 
 def _make_tool_then_text_response(tool_name, tool_input, tool_use_id, text):
     """Simulate: first response has tool_use, second response has text."""
-    tool_block = MagicMock()
-    tool_block.type = "tool_use"
-    tool_block.id = tool_use_id
-    tool_block.name = tool_name
-    tool_block.input = tool_input
+    from core.llm import LLMMessage, LLMUsage
 
-    first_final = MagicMock()
-    first_final.content = [tool_block]
+    first_final = LLMMessage(
+        content=[{
+            "type": "tool_use",
+            "id": tool_use_id,
+            "name": tool_name,
+            "input": tool_input,
+        }],
+        usage=LLMUsage(),
+    )
     first_stream = MagicMock()
     first_stream.__enter__ = MagicMock(return_value=first_stream)
     first_stream.__exit__ = MagicMock(return_value=False)

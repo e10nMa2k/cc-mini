@@ -1,6 +1,6 @@
 import pytest
-from core.tools.file_read import FileReadTool
-from core.tools.glob_tool import GlobTool
+from tools.file_read import FileReadTool
+from tools.glob_tool import GlobTool
 
 
 @pytest.fixture
@@ -61,7 +61,7 @@ def test_glob_is_read_only():
     assert GlobTool().is_read_only() is True
 
 
-from core.tools.grep_tool import GrepTool
+from tools.grep_tool import GrepTool
 
 
 def test_grep_finds_pattern(tmp_path):
@@ -92,12 +92,13 @@ def test_grep_is_read_only():
     assert GrepTool().is_read_only() is True
 
 
-from core.tools.file_edit import FileEditTool
+from tools.file_edit import FileEditTool
 
 
 def test_file_edit_replaces_unique_string(tmp_path):
     f = tmp_path / "code.py"
     f.write_text("def hello():\n    pass\n")
+    FileEditTool.mark_file_read(str(f))
 
     result = FileEditTool().execute(
         file_path=str(f),
@@ -111,6 +112,7 @@ def test_file_edit_replaces_unique_string(tmp_path):
 def test_file_edit_fails_on_duplicate_string(tmp_path):
     f = tmp_path / "code.py"
     f.write_text("pass\npass\n")
+    FileEditTool.mark_file_read(str(f))
 
     result = FileEditTool().execute(file_path=str(f), old_string="pass", new_string="x")
     assert result.is_error
@@ -120,6 +122,7 @@ def test_file_edit_fails_on_duplicate_string(tmp_path):
 def test_file_edit_replace_all(tmp_path):
     f = tmp_path / "code.py"
     f.write_text("x = 1\nx = 2\n")
+    FileEditTool.mark_file_read(str(f))
 
     result = FileEditTool().execute(file_path=str(f), old_string="x", new_string="y", replace_all=True)
     assert not result.is_error
@@ -137,12 +140,13 @@ def test_file_edit_missing_file():
 def test_file_edit_string_not_found(tmp_path):
     f = tmp_path / "code.py"
     f.write_text("hello\n")
+    FileEditTool.mark_file_read(str(f))
     result = FileEditTool().execute(file_path=str(f), old_string="xyz", new_string="abc")
     assert result.is_error
     assert "not found" in result.content.lower()
 
 
-from core.tools.bash import BashTool
+from tools.bash import BashTool
 
 
 def test_bash_runs_command():

@@ -128,7 +128,7 @@ class Narrator:
     def _init_client(self) -> None:
         """Try to create an OpenAI LLMClient."""
         try:
-            from ...llm import LLMClient
+            from core.llm import LLMClient
             self._client = LLMClient(provider="openai")
             self._llm_available = True
         except Exception:

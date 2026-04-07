@@ -17,7 +17,7 @@ for the "Other" option — matching the official behavior:
 
 from __future__ import annotations
 
-from .base import Tool, ToolResult
+from core.tool import Tool, ToolResult
 
 # Internal sentinel — never surfaced to the model.
 _OTHER = "__other__"

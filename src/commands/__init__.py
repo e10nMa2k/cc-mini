@@ -13,15 +13,15 @@ from typing import TYPE_CHECKING
 from rich.console import Console
 from rich.table import Table
 
-from .coordinator import current_session_mode, match_session_mode
+from features.coordinator import current_session_mode, match_session_mode
 
 if TYPE_CHECKING:
-    from .compact import CompactService
-    from .config import AppConfig
-    from .cost_tracker import CostTracker
-    from .engine import Engine
-    from .permissions import PermissionChecker
-    from .session import SessionStore
+    from features.compact import CompactService
+    from core.config import AppConfig
+    from features.cost_tracker import CostTracker
+    from core.engine import Engine
+    from core.permissions import PermissionChecker
+    from core.session import SessionStore
 
 
 # ---------------------------------------------------------------------------
@@ -74,7 +74,7 @@ def _cmd_help(ctx: CommandContext, args: str) -> None:
 
 
 def _cmd_compact(ctx: CommandContext, args: str) -> None:
-    from .compact import estimate_tokens
+    from features.compact import estimate_tokens
 
     messages = ctx.engine.get_messages()
     if len(messages) < 4:
@@ -85,7 +85,7 @@ def _cmd_compact(ctx: CommandContext, args: str) -> None:
     ctx.console.print(f"[dim]Compacting {len(messages)} messages (~{pre_tokens:,} tokens)…[/dim]")
 
     new_msgs, summary = ctx.compact_service.compact(
-        messages, ctx.engine.get_system_prompt(), custom_instructions=args,
+        messages, ctx.engine.system_prompt, custom_instructions=args,
     )
     ctx.engine.set_messages(new_msgs)
 
@@ -107,7 +107,7 @@ def _persist_compacted(ctx: CommandContext, new_msgs: list[dict]) -> None:
     # Create a new session store pointing to the same session id,
     # overwrite the JSONL with the compacted messages.
     import json
-    from .session import _serialize_message, _now_iso
+    from core.session import _serialize_message, _now_iso
     path = ctx.session_store._jsonl_path
     with open(path, "w", encoding="utf-8") as fh:
         for msg in new_msgs:
@@ -119,7 +119,7 @@ def _persist_compacted(ctx: CommandContext, new_msgs: list[dict]) -> None:
 
 
 def _cmd_history(ctx: CommandContext, args: str) -> None:
-    from .session import SessionStore
+    from core.session import SessionStore
 
     cwd = str(os.getcwd())
     sessions = SessionStore.list_sessions(cwd)
@@ -146,7 +146,7 @@ def _cmd_history(ctx: CommandContext, args: str) -> None:
 
 
 def _cmd_resume(ctx: CommandContext, args: str) -> None:
-    from .session import SessionStore
+    from core.session import SessionStore
 
     cwd = str(os.getcwd())
     sessions = SessionStore.list_sessions(cwd)
@@ -232,7 +232,7 @@ def _cmd_clear(ctx: CommandContext, args: str) -> None:
 
 
 def _cmd_memory(ctx: CommandContext, args: str) -> None:
-    from .memory import load_memory_index
+    from features.memory import load_memory_index
 
     if ctx.memory_dir is None:
         ctx.console.print("[dim]Memory system not configured.[/dim]")
@@ -245,7 +245,7 @@ def _cmd_memory(ctx: CommandContext, args: str) -> None:
 
 
 def _cmd_remember(ctx: CommandContext, args: str) -> None:
-    from .memory import append_to_daily_log
+    from features.memory import append_to_daily_log
 
     if ctx.memory_dir is None:
         ctx.console.print("[dim]Memory system not configured.[/dim]")
@@ -266,7 +266,7 @@ def _cmd_dream(ctx: CommandContext, args: str) -> None:
 
 def _cmd_skills(ctx: CommandContext, args: str) -> None:
     """List all available skills."""
-    from .skills import list_skills
+    from features.skills import list_skills
 
     skills = list_skills(user_invocable_only=True)
     if not skills:
@@ -289,7 +289,7 @@ def _cmd_cost(ctx: CommandContext, args: str) -> None:
 
 
 def _cmd_model(ctx: CommandContext, args: str) -> None:
-    from .config import resolve_model, default_max_tokens_for_model, DEFAULT_MODEL
+    from core.config import resolve_model, default_max_tokens_for_model, DEFAULT_MODEL
 
     provider = ctx.app_config.provider
 
@@ -428,7 +428,7 @@ def _cmd_model(ctx: CommandContext, args: str) -> None:
 
 def _cmd_plan(ctx: CommandContext, args: str) -> None:
     """Enter plan mode or show current plan."""
-    from .plan import PlanModeManager
+    from features.plan import PlanModeManager
     pm: PlanModeManager | None = ctx.plan_manager  # type: ignore[assignment]
     if pm is None:
         ctx.console.print("[red]Plan mode not available.[/red]")
@@ -481,7 +481,7 @@ def handle_command(name: str, args: str, ctx: CommandContext) -> bool:
         return True
 
     # Try as a skill invocation
-    from .skills import get_skill
+    from features.skills import get_skill
     skill = get_skill(name)
     if skill is not None:
         return _execute_skill(skill, args, ctx)
@@ -499,7 +499,7 @@ def _execute_skill(skill, args: str, ctx: CommandContext) -> bool:
     Forked: run the skill in an isolated turn (save messages, clear, run,
     restore original messages).  Matches claude-code's ``context: 'fork'``.
     """
-    from .main import run_query
+    from tui.query import run_query
 
     prompt = skill.get_prompt(args)
     if not prompt:

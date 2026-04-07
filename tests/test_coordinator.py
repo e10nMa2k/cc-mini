@@ -1,4 +1,4 @@
-from core.coordinator import (
+from features.coordinator import (
     current_session_mode,
     get_coordinator_system_prompt,
     get_coordinator_user_context,

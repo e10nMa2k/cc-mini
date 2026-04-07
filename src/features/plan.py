@@ -13,8 +13,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .engine import Engine
-    from .tools.base import Tool
+    from core.engine import Engine
+    from core.tool import Tool
 
 # ---------------------------------------------------------------------------
 # Word slug generation (simplified from utils/words.ts)
@@ -111,13 +111,13 @@ class PlanModeManager:
         self._saved_prompt = self._engine.system_prompt
 
         # Switch to read-only tools + plan tools + AskUserQuestion
-        from .tools.plan_tools import EnterPlanModeTool, ExitPlanModeTool
-        from .tools.ask_user import AskUserQuestionTool
-        from .tools.file_read import FileReadTool
-        from .tools.glob_tool import GlobTool
-        from .tools.grep_tool import GrepTool
-        from .tools.file_edit import FileEditTool
-        from .tools.file_write import FileWriteTool
+        from tools.plan_tools import EnterPlanModeTool, ExitPlanModeTool
+        from tools.ask_user import AskUserQuestionTool
+        from tools.file_read import FileReadTool
+        from tools.glob_tool import GlobTool
+        from tools.grep_tool import GrepTool
+        from tools.file_edit import FileEditTool
+        from tools.file_write import FileWriteTool
 
         plan_tools: list[Tool] = [
             FileReadTool(),
@@ -132,7 +132,7 @@ class PlanModeManager:
         self._engine.set_tools(plan_tools)
 
         # Inject plan mode instructions into system prompt
-        from .context import get_plan_mode_section
+        from core.context import get_plan_mode_section
         plan_section = get_plan_mode_section(str(self._plan_file))
         self._engine.system_prompt = self._saved_prompt + "\n\n" + plan_section
 
