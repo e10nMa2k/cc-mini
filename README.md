@@ -74,9 +74,12 @@ pip install -e ".[dev]"
 export ANTHROPIC_API_KEY=sk-ant-...
 
 # Or OpenAI-compatible
-export CC_MINI_PROVIDER=openai
+export CC_MINI_PROVIDER=openai # protocol type, not vendor name
+# Azure AI Foundry and other OpenAI-compatible gateways still use "openai"
+# (do not set provider to "foundry", "bedrock", etc.)
 export OPENAI_API_KEY=sk-...
 export OPENAI_BASE_URL=https://your-gateway.example.com/v1
+export CC_MINI_MODEL=gpt-... # optional, default is "gpt-5.1-codex"
 ```
 
 ### Run

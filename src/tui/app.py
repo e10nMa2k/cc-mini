@@ -613,7 +613,6 @@ def main() -> None:
                 comp = get_companion()
                 if comp and _is_addressed(user_input, comp.name):
                     _companion_addressed = True
-                    import threading
                     reply_event = threading.Event()
                     def _direct_reply(text: str) -> None:
                         _set_reaction(text, print_to_terminal=True)
@@ -688,7 +687,7 @@ def main() -> None:
         for mem in extract_memory_tags(text):
             append_to_daily_log(memory_dir, mem)
 
-        # Auto-dream gate check
+        # Auto-dream gate check — run in background to avoid blocking the REPL
         current_sid = session_store.session_id if session_store else session_id
         sessions_path = session_store._dir if session_store else None
         if app_config.auto_dream and should_auto_dream(
@@ -708,22 +707,29 @@ def main() -> None:
                     current_session_id=current_sid,
                 )
                 transcript_dir = str(sessions_path) if sessions_path else ""
-                try:
-                    _run_dream(
-                        engine, memory_dir, permissions, quiet=True,
-                        transcript_dir=transcript_dir,
-                        session_ids=sids,
-                    )
-                    release_lock(memory_dir)
-                except Exception:
-                    # Rollback: rewind lock mtime so dream retries next time
-                    from features.memory import _lock_path
+
+                def _bg_dream(
+                    _prior_mtime=prior_mtime,
+                    _transcript_dir=transcript_dir,
+                    _sids=sids,
+                ):
                     try:
-                        lp = _lock_path(memory_dir)
-                        if lp.exists():
-                            os.utime(lp, (prior_mtime, prior_mtime))
-                    except OSError:
-                        pass
+                        _run_dream(
+                            engine, memory_dir, permissions, quiet=True,
+                            transcript_dir=_transcript_dir,
+                            session_ids=_sids,
+                        )
+                        release_lock(memory_dir)
+                    except Exception:
+                        from features.memory import _lock_path
+                        try:
+                            lp = _lock_path(memory_dir)
+                            if lp.exists():
+                                os.utime(lp, (_prior_mtime, _prior_mtime))
+                        except OSError:
+                            pass
+
+                threading.Thread(target=_bg_dream, daemon=True).start()
 
     # Print cost summary on exit
     if cost_tracker.total_cost_usd > 0:

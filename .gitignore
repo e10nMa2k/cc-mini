@@ -26,3 +26,12 @@ plan.md
 CLAUDE.md
 
 .cc-mini.toml
+
+
+# Ignore local configuration files that may contain sensitive information
+*.bat
+*.ps1
+*.env
+
+# vscode
+launch.json
