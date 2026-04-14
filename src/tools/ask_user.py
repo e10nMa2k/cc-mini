@@ -332,10 +332,22 @@ class AskUserQuestionTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Ask the user a question with predefined options. Use this to gather "
-            "preferences, clarify ambiguous instructions, or get decisions on "
-            "implementation choices. Each question has 2-4 options plus an automatic "
-            "'Other' option for free-form input."
+            "Use this tool when you need to ask the user questions during execution. "
+            "This allows you to:\n"
+            "1. Gather user preferences or requirements\n"
+            "2. Clarify ambiguous instructions\n"
+            "3. Get decisions on implementation choices as you work\n"
+            "4. Offer choices to the user about what direction to take.\n\n"
+            "Usage notes:\n"
+            "- Users will always be able to select \"Other\" to provide custom text input\n"
+            "- Use multiSelect: true to allow multiple answers to be selected for a question\n"
+            "- If you recommend a specific option, make that the first option in the list "
+            "and add \"(Recommended)\" at the end of the label\n\n"
+            "Plan mode note: In plan mode, use this tool to clarify requirements or choose "
+            "between approaches BEFORE finalizing your plan. Do NOT use this tool to ask "
+            "\"Is my plan ready?\" or \"Should I proceed?\" - use ExitPlanMode for plan "
+            "approval. Do not reference \"the plan\" in your questions because the user "
+            "cannot see the plan until you call ExitPlanMode."
         )
 
     @property
