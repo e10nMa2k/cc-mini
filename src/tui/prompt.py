@@ -91,6 +91,7 @@ def bordered_prompt(
     animator_toolbar=None,
     refresh_interval: float | None = None,
     terminal_mode_ref: list | None = None,
+    mode_hint: str | None = None,
 ) -> str:
     """Prompt with bordered input box that adapts to content height.
 
@@ -145,6 +146,8 @@ def bordered_prompt(
         fill = "\u2500" * max(0, w - 1)
         if _is_terminal():
             return [('bold fg:ansiyellow', f'\u256d{fill}')]
+        if mode_hint == "swarm":
+            return [('bold fg:ansimagenta', f'\u256d{fill}')]
         return [('bold fg:ansicyan', f'\u256d{fill}')]
 
     def _bot():
@@ -154,6 +157,14 @@ def bordered_prompt(
             w = 80
         if _is_terminal():
             hints = "\u2500 TERMINAL MODE \u00b7 ! to exit \u00b7 Enter run "
+            fill = "\u2500" * max(0, w - 1 - len(hints))
+            parts: list[tuple[str, str]] = [('fg:ansiyellow', f'\u2570{hints}{fill}')]
+        elif mode_hint == "swarm":
+            hints = "\u2500 Enter send \u00b7 / commands \u00b7 ! shell \u00b7 \u25c8 swarm "
+            fill = "\u2500" * max(0, w - 1 - len(hints))
+            parts: list[tuple[str, str]] = [('fg:ansimagenta', f'\u2570{hints}{fill}')]
+        elif mode_hint == "coordinator":
+            hints = "\u2500 Enter send \u00b7 / commands \u00b7 ! shell \u00b7 coordinator "
             fill = "\u2500" * max(0, w - 1 - len(hints))
             parts: list[tuple[str, str]] = [('fg:ansiyellow', f'\u2570{hints}{fill}')]
         else:
@@ -173,6 +184,8 @@ def bordered_prompt(
         if lineno == 0 and wrap_count == 0:
             if _is_terminal():
                 return [('bold fg:ansiyellow', '$ ')]
+            if mode_hint == "swarm":
+                return [('bold fg:ansimagenta', '\u25c8 ')]
             return [('bold fg:ansicyan', '> ')]
         return [('', '  ')]
 

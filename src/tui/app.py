@@ -32,6 +32,14 @@ from features.coordinator import (
     match_session_mode,
     set_coordinator_mode,
 )
+from core.swarm import (
+    TaskRegistry as SwarmRegistry,
+    SwarmCoordinator,
+    build_swarm_tools,
+)
+from core.swarm.prompts import (
+    get_coordinator_system_prompt as get_swarm_coordinator_prompt,
+)
 from features.cost_tracker import CostTracker
 from core.session import SessionStore
 from features.compact import CompactService, estimate_tokens, should_compact
@@ -135,7 +143,11 @@ def main() -> None:
                         help="Minimum new sessions before auto-dream triggers (default: 5)")
     parser.add_argument("--coordinator", action="store_true",
                         help="Enable coordinator mode with background workers")
+    parser.add_argument("--swarm", action="store_true",
+                        help="Enable agent swarm mode (parallel agents: researcher, implementer, verifier)")
     args = parser.parse_args()
+    if args.swarm and args.coordinator:
+        parser.error("--swarm and --coordinator are mutually exclusive; use one or the other")
 
     try:
         app_config = load_app_config(args)
@@ -160,6 +172,13 @@ def main() -> None:
     if args.coordinator:
         set_coordinator_mode(True)
 
+    # Swarm mode: initialise TaskRegistry + SwarmCoordinator from core.swarm
+    _swarm_registry: SwarmRegistry | None = None
+    _swarm_coordinator_obj: SwarmCoordinator | None = None
+    if args.swarm:
+        _swarm_registry = SwarmRegistry()
+        _swarm_coordinator_obj = SwarmCoordinator(_swarm_registry)
+
     def _build_base_tools() -> list:
         return [
             FileReadTool(), GlobTool(), GrepTool(),
@@ -173,7 +192,11 @@ def main() -> None:
         prompt = build_system_prompt(cwd=cwd, model=app_config.model, memory_dir=memory_dir)
         if skills_section:
             prompt += "\n\n" + skills_section
-        if coordinator_enabled:
+        if _swarm_coordinator_obj is not None:
+            # Swarm mode: use the richer multi-type coordinator prompt from core.swarm
+            base_tool_names = [t.name for t in _build_base_tools()]
+            prompt += "\n\n" + get_swarm_coordinator_prompt(worker_tools=base_tool_names)
+        elif coordinator_enabled:
             extra = get_coordinator_user_context(worker_tool_names)
             worker_context = extra.get("workerToolsContext")
             if worker_context:
@@ -245,7 +268,17 @@ def main() -> None:
             EnterPlanModeTool(plan_manager),
             ExitPlanModeTool(plan_manager),
         ])
-        if coordinator_enabled:
+        if _swarm_coordinator_obj is not None and _swarm_registry is not None:
+            # Swarm mode: use richer multi-type agents backed by core.swarm
+            tools.extend(build_swarm_tools(
+                registry=_swarm_registry,
+                coordinator=_swarm_coordinator_obj,
+                provider=app_config.provider,
+                model=app_config.model,
+                api_key=app_config.api_key,
+                base_url=app_config.base_url,
+            ))
+        elif coordinator_enabled:
             tools.extend([
                 AgentTool(worker_manager),
                 SendMessageTool(worker_manager),
@@ -349,11 +382,19 @@ def main() -> None:
         f"[dim]{app_config.provider}:{app_config.model} · "
         f"max_tokens={app_config.max_tokens}[/dim]"
     )
-    if is_coordinator_mode():
-        config_note += " [bold yellow]· swarm[/bold yellow]"
+    if _swarm_coordinator_obj is not None:
+        config_note += " [bold magenta]· swarm[/bold magenta]"
+    elif is_coordinator_mode():
+        config_note += " [bold yellow]· coordinator[/bold yellow]"
     session_note = f"[dim]session {session_store.session_id[:8]}[/dim]" if session_store else ""
     console.print("[bold cyan]cc-mini[/bold cyan]  "
                   f"{config_note}  {session_note}")
+    if _swarm_coordinator_obj is not None:
+        console.print(
+            "[bold magenta]◈ Agent Swarm[/bold magenta]  "
+            "[dim]researcher · implementer · verifier · general-purpose"
+            "   depth 3   parallel background[/dim]"
+        )
 
 
     _file_history = FileHistory(str(_HISTORY_FILE))
@@ -409,77 +450,126 @@ def main() -> None:
     def _drain_worker_notifications() -> None:
         if _exiting:
             return
-        # Collect managers to drain: coordinator + plan-mode workers
+        import re as _re
+
+        def _parse_and_display(notification: str, is_swarm: bool = False) -> bool:
+            """Parse notification XML, display completion banner, inject into engine.
+            Returns False if interrupted and outer loop should stop."""
+            _desc_tag = _re.search(r"<description>(.*?)</description>", notification)
+            _summary = _re.search(r"<summary>(.*?)</summary>", notification)
+            _uses = _re.search(r"<tool_uses>(\d+)</tool_uses>", notification)
+            _dur = _re.search(r"<duration_ms>(\d+)</duration_ms>", notification)
+            _status_m = _re.search(r"<status>(.*?)</status>", notification)
+            _result_m = _re.search(r"<result>(.*?)</result>", notification, _re.DOTALL)
+            # Prefer explicit <description> tag; fall back to parsing <summary>
+            if _desc_tag:
+                task_desc = _desc_tag.group(1)
+            elif _summary:
+                _m = _re.search(r'Agent "([^"]+)"', _summary.group(1))
+                task_desc = _m.group(1) if _m else _summary.group(1)
+            else:
+                task_desc = "agent"
+            uses = _uses.group(1) if _uses else "?"
+            dur_s = f"{int(_dur.group(1)) / 1000:.1f}" if _dur else "?"
+            status = _status_m.group(1) if _status_m else "completed"
+
+            if is_swarm:
+                # Swarm mode: magenta ◈ icon, agent-flavoured wording
+                if status == "completed":
+                    console.print(
+                        f"\n[bold magenta]◈ Agent done[/bold magenta]"
+                        f"  [magenta]{task_desc}[/magenta]"
+                        f"  [dim]{uses} tool uses · {dur_s}s[/dim]"
+                    )
+                elif status == "failed":
+                    console.print(
+                        f"\n[bold red]◈ Agent failed[/bold red]"
+                        f"  [red]{task_desc}[/red]"
+                        f"  [dim]{uses} tool uses · {dur_s}s[/dim]"
+                    )
+                else:
+                    console.print(
+                        f"\n[bold yellow]◈ Agent stopped[/bold yellow]"
+                        f"  [yellow]{task_desc}[/yellow]"
+                        f"  [dim]{uses} tool uses · {dur_s}s[/dim]"
+                    )
+            else:
+                # Coordinator mode: cyan ✓/✗/⏹ icons
+                if status == "completed":
+                    console.print(
+                        f"\n[bold green]✓ Sub-agent complete[/bold green]"
+                        f"  [green]{task_desc}[/green]"
+                        f"  [dim]{uses} tool uses · {dur_s}s[/dim]"
+                    )
+                elif status == "failed":
+                    console.print(
+                        f"\n[bold red]✗ Sub-agent failed[/bold red]"
+                        f"  [red]{task_desc}[/red]"
+                        f"  [dim]{uses} tool uses · {dur_s}s[/dim]"
+                    )
+                else:
+                    console.print(
+                        f"\n[bold yellow]⏹ Sub-agent stopped[/bold yellow]"
+                        f"  [yellow]{task_desc}[/yellow]"
+                        f"  [dim]{uses} tool uses · {dur_s}s[/dim]"
+                    )
+
+            # Show brief result preview for completed agents
+            if _result_m and status == "completed":
+                result_text = _result_m.group(1).strip()
+                if result_text:
+                    preview = result_text[:200].replace("\n", " ")
+                    if len(result_text) > 200:
+                        preview += "…"
+                    console.print(f"  [dim italic]{preview}[/dim italic]")
+
+            try:
+                run_query(engine, notification, print_mode=False, permissions=permissions)
+                return True
+            except (KeyboardInterrupt, Exception):
+                return False
+
+        # Drain swarm coordinator (swarm mode)
+        if _swarm_coordinator_obj is not None:
+            for notification in _swarm_coordinator_obj.drain_notifications():
+                if not _parse_and_display(notification, is_swarm=True):
+                    return
+
+        # Drain coordinator / plan-mode worker notifications
         managers_to_drain = []
         if is_coordinator_mode():
             managers_to_drain.append(worker_manager)
         plan_wm = plan_manager.worker_manager
         if plan_wm is not None:
             managers_to_drain.append(plan_wm)
-        if not managers_to_drain:
-            return
-        import re as _re
         for mgr in managers_to_drain:
             while True:
                 notifications = mgr.drain_notifications()
                 if not notifications:
                     break
                 for notification in notifications:
-                    # Extract fields from XML notification
-                    _desc_tag = _re.search(r"<description>(.*?)</description>", notification)
-                    _summary = _re.search(r"<summary>(.*?)</summary>", notification)
-                    _uses = _re.search(r"<tool_uses>(\d+)</tool_uses>", notification)
-                    _dur = _re.search(r"<duration_ms>(\d+)</duration_ms>", notification)
-                    _status = _re.search(r"<status>(.*?)</status>", notification)
-                    _result_m = _re.search(r"<result>(.*?)</result>", notification, _re.DOTALL)
-                    # Prefer explicit <description> tag; fall back to parsing <summary>
-                    if _desc_tag:
-                        task_desc = _desc_tag.group(1)
-                    elif _summary:
-                        _m = _re.search(r'Agent "([^"]+)"', _summary.group(1))
-                        task_desc = _m.group(1) if _m else _summary.group(1)
-                    else:
-                        task_desc = "worker"
-                    uses = _uses.group(1) if _uses else "?"
-                    dur_s = f"{int(_dur.group(1)) / 1000:.1f}" if _dur else "?"
-                    status = _status.group(1) if _status else "completed"
-
-                    if status == "completed":
-                        console.print(
-                            f"\n[bold green]✓ Sub-agent complete[/bold green]"
-                            f"  [green]{task_desc}[/green]"
-                            f"  [dim]{uses} tool uses · {dur_s}s[/dim]"
-                        )
-                    elif status == "failed":
-                        console.print(
-                            f"\n[bold red]✗ Sub-agent failed[/bold red]"
-                            f"  [red]{task_desc}[/red]"
-                            f"  [dim]{uses} tool uses · {dur_s}s[/dim]"
-                        )
-                    else:
-                        console.print(
-                            f"\n[bold yellow]⏹ Sub-agent stopped[/bold yellow]"
-                            f"  [yellow]{task_desc}[/yellow]"
-                            f"  [dim]{uses} tool uses · {dur_s}s[/dim]"
-                        )
-
-                    # Show brief result preview for completed workers
-                    if _result_m and status == "completed":
-                        result_text = _result_m.group(1).strip()
-                        if result_text:
-                            preview = result_text[:200].replace("\n", " ")
-                            if len(result_text) > 200:
-                                preview += "…"
-                            console.print(f"  [dim italic]{preview}[/dim italic]")
-
-                    try:
-                        run_query(engine, notification, print_mode=False, permissions=permissions)
-                    except (KeyboardInterrupt, Exception):
+                    if not _parse_and_display(notification, is_swarm=False):
                         return
 
     def _show_worker_status() -> None:
-        """Show running worker status before prompt."""
-        # Collect statuses from coordinator + plan-mode workers
+        """Show running worker/swarm-agent status before prompt."""
+        # Swarm mode: display live agents from TaskRegistry
+        if _swarm_registry is not None:
+            swarm_running = _swarm_registry.get_running()
+            if swarm_running:
+                n = len(swarm_running)
+                console.print(
+                    f"[bold magenta]◈ Swarm · {n} agent{'s' if n > 1 else ''} active[/bold magenta]"
+                )
+                for task in swarm_running:
+                    uses = task.tool_use_count
+                    console.print(
+                        f"  [magenta]◎[/magenta] [dim]{task.task_id}[/dim]  "
+                        f"[magenta]{task.description}[/magenta]"
+                        f"  [dim]{uses} tool use{'s' if uses != 1 else ''}[/dim]"
+                    )
+
+        # Coordinator / plan-mode workers
         all_statuses = []
         if is_coordinator_mode():
             all_statuses.extend(worker_manager.get_running_status())
@@ -522,6 +612,10 @@ def main() -> None:
                 animator.start()
             console.print()
             _terminal_mode_ref[0] = False  # always start in chat mode
+            _mode_hint = (
+                "swarm" if _swarm_coordinator_obj is not None
+                else "coordinator" if is_coordinator_mode() else None
+            )
             user_input = bordered_prompt(
                 console,
                 history=_file_history,
@@ -529,6 +623,7 @@ def main() -> None:
                 animator_toolbar=animator.toolbar_text if animator else None,
                 refresh_interval=0.5 if animator else None,
                 terminal_mode_ref=_terminal_mode_ref,
+                mode_hint=_mode_hint,
             ).strip()
         except KeyboardInterrupt:
             now = time.monotonic()

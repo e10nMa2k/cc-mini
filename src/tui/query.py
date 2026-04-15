@@ -81,7 +81,13 @@ def run_query(engine: Engine, user_input: str | list, print_mode: bool,
                         key = f"{tool_name}({preview})"
                         if tool_name == "Agent":
                             desc = tool_input.get("description", "worker")[:60]
-                            pending_tools[key] = (tool_name, f"◎ {desc}")
+                            agent_type = tool_input.get("subagent_type", "")
+                            _SWARM_TYPES = ("general-purpose", "researcher", "implementer", "verifier")
+                            if agent_type in _SWARM_TYPES:
+                                # Swarm agent: ◈ icon with type badge
+                                pending_tools[key] = (tool_name, f"◈ [{agent_type}] {desc}")
+                            else:
+                                pending_tools[key] = (tool_name, f"◎ {desc}")
                         else:
                             pending_tools[key] = (tool_name, f"↳ {key}")
 
@@ -90,6 +96,9 @@ def run_query(engine: Engine, user_input: str | list, print_mode: bool,
                         _, tool_name, tool_input, activity = event
                         n = len(pending_tools)
                         agent_count = sum(1 for tn, _ in pending_tools.values() if tn == "Agent")
+                        _SWARM_TYPES = ("general-purpose", "researcher", "implementer", "verifier")
+                        agent_type = tool_input.get("subagent_type", "") if tool_name == "Agent" else ""
+                        is_swarm_agent = agent_type in _SWARM_TYPES
                         if tool_name == "AskUserQuestion":
                             # Interactive prompt — stop spinner so it renders on a clean line
                             spinner.stop()
@@ -97,9 +106,20 @@ def run_query(engine: Engine, user_input: str | list, print_mode: bool,
                             console.print(f"[dim]{line}[/dim]", highlight=False)
                         elif tool_name == "Agent" and n == 1:
                             desc = tool_input.get("description", "worker")[:50]
-                            spinner.start(f"◎ Spawning sub-agent: {desc}…")
+                            if is_swarm_agent:
+                                spinner.start(f"◈ Spawning {agent_type}: {desc}…")
+                            else:
+                                spinner.start(f"◎ Spawning sub-agent: {desc}…")
                         elif agent_count > 1 and agent_count == n:
-                            spinner.start(f"◎ Launching swarm: {agent_count} sub-agents…")
+                            # All pending are Agent calls — check if they are swarm-type
+                            swarm_count = sum(
+                                1 for _, (tn, line) in pending_tools.items()
+                                if tn == "Agent" and line.startswith("◈")
+                            )
+                            if swarm_count == agent_count:
+                                spinner.start(f"◈ Launching swarm: {agent_count} agents…")
+                            else:
+                                spinner.start(f"◎ Launching swarm: {agent_count} sub-agents…")
                         elif n > 1:
                             names = [tn for tn, _ in pending_tools.values()]
                             spinner.start(collapsed_tool_summary(names))
@@ -117,11 +137,23 @@ def run_query(engine: Engine, user_input: str | list, print_mode: bool,
                         tname, line = pending_tools.pop(key, (tool_name, f"↳ {key}"))
                         if tname == "Agent" and not result.is_error:
                             desc = tool_input.get("description", "worker")[:60]
-                            console.print(
-                                f"[cyan]◎[/cyan] [dim]Sub-agent started[/dim]  "
-                                f"[bold cyan]{desc}[/bold cyan]  [dim]→ running in background[/dim]",
-                                highlight=False,
-                            )
+                            agent_type = tool_input.get("subagent_type", "")
+                            _SWARM_TYPES = ("general-purpose", "researcher", "implementer", "verifier")
+                            if agent_type in _SWARM_TYPES:
+                                # Swarm agent: magenta ◈ with type badge
+                                type_badge = f"  [dim]{agent_type}[/dim]" if agent_type else ""
+                                console.print(
+                                    f"[magenta]◈[/magenta] [dim]Agent launched[/dim]{type_badge}"
+                                    f"  [bold magenta]{desc}[/bold magenta]"
+                                    f"  [dim]→ background[/dim]",
+                                    highlight=False,
+                                )
+                            else:
+                                console.print(
+                                    f"[cyan]◎[/cyan] [dim]Sub-agent started[/dim]  "
+                                    f"[bold cyan]{desc}[/bold cyan]  [dim]→ running in background[/dim]",
+                                    highlight=False,
+                                )
                         elif result.is_error:
                             console.print(f"[dim]{line}[/dim] [red]✗[/red]", highlight=False)
                             console.print(f"  [red]{result.content[:200]}[/red]")
@@ -131,7 +163,14 @@ def run_query(engine: Engine, user_input: str | list, print_mode: bool,
                         remaining_agents = sum(1 for tn, _ in pending_tools.values() if tn == "Agent")
                         if pending_tools:
                             if remaining_agents > 0 and remaining_agents == len(pending_tools):
-                                spinner.start(f"◎ {remaining_agents} more sub-agent{'s' if remaining_agents > 1 else ''} starting…")
+                                swarm_remaining = sum(
+                                    1 for _, (tn, l) in pending_tools.items()
+                                    if tn == "Agent" and l.startswith("◈")
+                                )
+                                if swarm_remaining == remaining_agents:
+                                    spinner.start(f"◈ {remaining_agents} more agent{'s' if remaining_agents > 1 else ''} starting…")
+                                else:
+                                    spinner.start(f"◎ {remaining_agents} more sub-agent{'s' if remaining_agents > 1 else ''} starting…")
                             else:
                                 names = [tn for tn, _ in pending_tools.values()]
                                 spinner.start(collapsed_tool_summary(names))
