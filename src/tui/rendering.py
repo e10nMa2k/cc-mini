@@ -152,6 +152,9 @@ def collapsed_tool_summary(tool_names: list[str], done: bool = False) -> str:
         "Bash": ("Running {n} commands", "Running command"),
         "Edit": ("Editing {n} files", "Editing file"),
         "Write": ("Writing {n} files", "Writing file"),
+        "Agent": ("Spawning {n} sub-agents", "Spawning sub-agent"),
+        "SendMessage": ("Messaging {n} sub-agents", "Messaging sub-agent"),
+        "TaskStop": ("Stopping {n} sub-agents", "Stopping sub-agent"),
     }
     _DONE = {
         "Read": ("Read {n} files", "Read file"),
@@ -160,6 +163,9 @@ def collapsed_tool_summary(tool_names: list[str], done: bool = False) -> str:
         "Bash": ("Ran {n} commands", "Ran command"),
         "Edit": ("Edited {n} files", "Edited file"),
         "Write": ("Wrote {n} files", "Wrote file"),
+        "Agent": ("Spawned {n} sub-agents", "Spawned sub-agent"),
+        "SendMessage": ("Messaged {n} sub-agents", "Messaged sub-agent"),
+        "TaskStop": ("Stopped {n} sub-agents", "Stopped sub-agent"),
     }
     labels = _DONE if done else _ACTIVE
     for name, n in counts.items():

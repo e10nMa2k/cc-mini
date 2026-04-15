@@ -350,7 +350,7 @@ def main() -> None:
         f"max_tokens={app_config.max_tokens}[/dim]"
     )
     if is_coordinator_mode():
-        config_note += " [dim yellow]· coordinator[/dim yellow]"
+        config_note += " [bold yellow]· swarm[/bold yellow]"
     session_note = f"[dim]session {session_store.session_id[:8]}[/dim]" if session_store else ""
     console.print("[bold cyan]cc-mini[/bold cyan]  "
                   f"{config_note}  {session_note}")
@@ -418,24 +418,60 @@ def main() -> None:
             managers_to_drain.append(plan_wm)
         if not managers_to_drain:
             return
+        import re as _re
         for mgr in managers_to_drain:
             while True:
                 notifications = mgr.drain_notifications()
                 if not notifications:
                     break
                 for notification in notifications:
-                    # Extract summary info from XML notification
-                    import re as _re
-                    _desc = _re.search(r"<summary>(.*?)</summary>", notification)
+                    # Extract fields from XML notification
+                    _desc_tag = _re.search(r"<description>(.*?)</description>", notification)
+                    _summary = _re.search(r"<summary>(.*?)</summary>", notification)
                     _uses = _re.search(r"<tool_uses>(\d+)</tool_uses>", notification)
                     _dur = _re.search(r"<duration_ms>(\d+)</duration_ms>", notification)
                     _status = _re.search(r"<status>(.*?)</status>", notification)
-                    desc = _desc.group(1) if _desc else "Worker update"
+                    _result_m = _re.search(r"<result>(.*?)</result>", notification, _re.DOTALL)
+                    # Prefer explicit <description> tag; fall back to parsing <summary>
+                    if _desc_tag:
+                        task_desc = _desc_tag.group(1)
+                    elif _summary:
+                        _m = _re.search(r'Agent "([^"]+)"', _summary.group(1))
+                        task_desc = _m.group(1) if _m else _summary.group(1)
+                    else:
+                        task_desc = "worker"
                     uses = _uses.group(1) if _uses else "?"
                     dur_s = f"{int(_dur.group(1)) / 1000:.1f}" if _dur else "?"
                     status = _status.group(1) if _status else "completed"
-                    icon = "[green]●[/green]" if status == "completed" else "[red]●[/red]"
-                    console.print(f"\n{icon} [dim]{desc} ({uses} tool uses, {dur_s}s)[/dim]")
+
+                    if status == "completed":
+                        console.print(
+                            f"\n[bold green]✓ Sub-agent complete[/bold green]"
+                            f"  [green]{task_desc}[/green]"
+                            f"  [dim]{uses} tool uses · {dur_s}s[/dim]"
+                        )
+                    elif status == "failed":
+                        console.print(
+                            f"\n[bold red]✗ Sub-agent failed[/bold red]"
+                            f"  [red]{task_desc}[/red]"
+                            f"  [dim]{uses} tool uses · {dur_s}s[/dim]"
+                        )
+                    else:
+                        console.print(
+                            f"\n[bold yellow]⏹ Sub-agent stopped[/bold yellow]"
+                            f"  [yellow]{task_desc}[/yellow]"
+                            f"  [dim]{uses} tool uses · {dur_s}s[/dim]"
+                        )
+
+                    # Show brief result preview for completed workers
+                    if _result_m and status == "completed":
+                        result_text = _result_m.group(1).strip()
+                        if result_text:
+                            preview = result_text[:200].replace("\n", " ")
+                            if len(result_text) > 200:
+                                preview += "…"
+                            console.print(f"  [dim italic]{preview}[/dim italic]")
+
                     try:
                         run_query(engine, notification, print_mode=False, permissions=permissions)
                     except (KeyboardInterrupt, Exception):
@@ -450,12 +486,18 @@ def main() -> None:
         plan_wm = plan_manager.worker_manager
         if plan_wm is not None:
             all_statuses.extend(plan_wm.get_running_status())
+        if not all_statuses:
+            return
+        n = len(all_statuses)
+        console.print(
+            f"[bold cyan]⟳ {n} sub-agent{'s' if n > 1 else ''} running in background[/bold cyan]"
+        )
         for s in all_statuses:
             uses = s["tool_uses"]
-            activity = s["activity"] or "working"
+            activity = s["activity"] or "working…"
             console.print(
-                f"[dim]  ● {s['description']} — "
-                f"{uses} tool use{'s' if uses != 1 else ''} · {activity}[/dim]"
+                f"  [cyan]◎[/cyan] [cyan]{s['description']}[/cyan]"
+                f"  [dim]{uses} tool use{'s' if uses != 1 else ''} · {activity}[/dim]"
             )
 
     while True:

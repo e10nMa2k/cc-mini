@@ -79,17 +79,27 @@ def run_query(engine: Engine, user_input: str | list, print_mode: bool,
                         _, tool_name, tool_input, activity = event
                         preview = tool_preview(tool_name, tool_input)
                         key = f"{tool_name}({preview})"
-                        pending_tools[key] = (tool_name, f"↳ {key}")
+                        if tool_name == "Agent":
+                            desc = tool_input.get("description", "worker")[:60]
+                            pending_tools[key] = (tool_name, f"◎ {desc}")
+                        else:
+                            pending_tools[key] = (tool_name, f"↳ {key}")
 
                 elif event[0] == "tool_executing":
                     if not quiet:
                         _, tool_name, tool_input, activity = event
                         n = len(pending_tools)
+                        agent_count = sum(1 for tn, _ in pending_tools.values() if tn == "Agent")
                         if tool_name == "AskUserQuestion":
                             # Interactive prompt — stop spinner so it renders on a clean line
                             spinner.stop()
                             _, line = next(iter(pending_tools.values()), ("", f"↳ {tool_name}"))
                             console.print(f"[dim]{line}[/dim]", highlight=False)
+                        elif tool_name == "Agent" and n == 1:
+                            desc = tool_input.get("description", "worker")[:50]
+                            spinner.start(f"◎ Spawning sub-agent: {desc}…")
+                        elif agent_count > 1 and agent_count == n:
+                            spinner.start(f"◎ Launching swarm: {agent_count} sub-agents…")
                         elif n > 1:
                             names = [tn for tn, _ in pending_tools.values()]
                             spinner.start(collapsed_tool_summary(names))
@@ -105,15 +115,26 @@ def run_query(engine: Engine, user_input: str | list, print_mode: bool,
                         preview = tool_preview(tool_name, tool_input)
                         key = f"{tool_name}({preview})"
                         tname, line = pending_tools.pop(key, (tool_name, f"↳ {key}"))
-                        if result.is_error:
+                        if tname == "Agent" and not result.is_error:
+                            desc = tool_input.get("description", "worker")[:60]
+                            console.print(
+                                f"[cyan]◎[/cyan] [dim]Sub-agent started[/dim]  "
+                                f"[bold cyan]{desc}[/bold cyan]  [dim]→ running in background[/dim]",
+                                highlight=False,
+                            )
+                        elif result.is_error:
                             console.print(f"[dim]{line}[/dim] [red]✗[/red]", highlight=False)
                             console.print(f"  [red]{result.content[:200]}[/red]")
                         else:
                             console.print(f"[dim]{line}[/dim] [green]✓[/green]", highlight=False)
 
+                        remaining_agents = sum(1 for tn, _ in pending_tools.values() if tn == "Agent")
                         if pending_tools:
-                            names = [tn for tn, _ in pending_tools.values()]
-                            spinner.start(collapsed_tool_summary(names))
+                            if remaining_agents > 0 and remaining_agents == len(pending_tools):
+                                spinner.start(f"◎ {remaining_agents} more sub-agent{'s' if remaining_agents > 1 else ''} starting…")
+                            else:
+                                names = [tn for tn, _ in pending_tools.values()]
+                                spinner.start(collapsed_tool_summary(names))
                         else:
                             streaming = False
                             listener.resume()

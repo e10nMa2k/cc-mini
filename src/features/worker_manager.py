@@ -198,6 +198,7 @@ class WorkerManager:
         parts = [
             "<task-notification>",
             f"<task-id>{escape(task.task_id)}</task-id>",
+            f"<description>{escape(task.description)}</description>",
             f"<status>{escape(task.status)}</status>",
             f"<summary>{escape(task.summary)}</summary>",
         ]
