@@ -10,12 +10,13 @@ from __future__ import annotations
 
 import random
 from pathlib import Path
-from typing import Callable, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from core.engine import Engine
     from core.tool import Tool
     from core.permissions import PermissionChecker
+    from core.swarm import TaskRegistry, SwarmCoordinator
 
 # ---------------------------------------------------------------------------
 # Word slug generation (simplified from utils/words.ts)
@@ -59,27 +60,21 @@ class PlanModeManager:
     """Manages plan mode lifecycle: enter, exit, file management, prompt injection.
 
     Constructed once at startup, bound to engine after engine creation.
-    Passed to EnterPlanModeTool / ExitPlanModeTool via constructor injection
-    (same pattern as AgentTool holding WorkerManager).
+    Passed to EnterPlanModeTool / ExitPlanModeTool via constructor injection.
     """
 
     def __init__(self) -> None:
         self._engine: Engine | None = None
         self._permissions: PermissionChecker | None = None
-        self._build_plan_worker_engine: Callable[[], object] | None = None
-        self._plan_worker_manager: object | None = None
+        self._plan_registry: TaskRegistry | None = None
+        self._plan_coordinator: SwarmCoordinator | None = None
         self._active: bool = False
         self._plan_file: Path | None = None
         self._saved_tools: list[Tool] | None = None
         self._saved_prompt: str | None = None
 
-    def bind_engine(
-        self,
-        engine: Engine,
-        build_plan_worker_engine: Callable[[], object] | None = None,
-    ) -> None:
+    def bind_engine(self, engine: Engine) -> None:
         self._engine = engine
-        self._build_plan_worker_engine = build_plan_worker_engine
 
     def set_permissions(self, permissions: PermissionChecker) -> None:
         self._permissions = permissions
@@ -93,9 +88,14 @@ class PlanModeManager:
         return str(self._plan_file) if self._plan_file else None
 
     @property
-    def worker_manager(self) -> object | None:
-        """Plan-mode WorkerManager, if active and agents are enabled."""
-        return self._plan_worker_manager if self._active else None
+    def plan_registry(self) -> object | None:
+        """Plan-mode TaskRegistry, if plan mode is active."""
+        return self._plan_registry if self._active else None
+
+    @property
+    def plan_coordinator(self) -> object | None:
+        """Plan-mode SwarmCoordinator, if plan mode is active."""
+        return self._plan_coordinator if self._active else None
 
     def get_plan_content(self) -> str | None:
         if self._plan_file and self._plan_file.exists():
@@ -147,18 +147,14 @@ class PlanModeManager:
             ExitPlanModeTool(self),
         ]
 
-        # Add parallel subagent tools if worker engine builder is available
-        self._plan_worker_manager = None
-        if self._build_plan_worker_engine is not None:
-            from features.worker_manager import WorkerManager
-            from tools.agent import AgentTool, SendMessageTool, TaskStopTool
-
-            self._plan_worker_manager = WorkerManager(self._build_plan_worker_engine)
-            plan_tools.extend([
-                AgentTool(self._plan_worker_manager),
-                SendMessageTool(self._plan_worker_manager),
-                TaskStopTool(self._plan_worker_manager),
-            ])
+        # Add swarm agent tools for parallel background research during planning
+        from core.swarm import TaskRegistry, SwarmCoordinator, build_swarm_tools
+        self._plan_registry = TaskRegistry()
+        self._plan_coordinator = SwarmCoordinator(self._plan_registry)
+        plan_tools.extend(build_swarm_tools(
+            registry=self._plan_registry,
+            coordinator=self._plan_coordinator,
+        ))
 
         self._engine.set_tools(plan_tools)
 
@@ -199,7 +195,8 @@ class PlanModeManager:
         self._active = False
         self._saved_tools = None
         self._saved_prompt = None
-        self._plan_worker_manager = None
+        self._plan_registry = None
+        self._plan_coordinator = None
 
         plan_path = str(self._plan_file) if self._plan_file else "unknown"
 

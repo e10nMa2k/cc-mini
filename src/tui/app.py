@@ -16,7 +16,6 @@ from core.config import load_app_config
 from core.context import build_system_prompt
 from core.engine import AbortedError, Engine
 from tools import AskUserQuestionTool
-from tools import AgentTool, SendMessageTool, TaskStopTool
 from tools import BashTool
 from tools import FileEditTool
 from tools import FileReadTool
@@ -45,7 +44,6 @@ from core.session import SessionStore
 from features.compact import CompactService, estimate_tokens, should_compact
 from tui.keylistener import EscListener
 from core.permissions import PermissionChecker
-from features.worker_manager import WorkerManager
 from features.sandbox.config import load_sandbox_config
 from features.sandbox.manager import SandboxManager
 from features.memory import (
@@ -172,12 +170,21 @@ def main() -> None:
     if args.coordinator:
         set_coordinator_mode(True)
 
-    # Swarm mode: initialise TaskRegistry + SwarmCoordinator from core.swarm
+    # Swarm mode: initialise TaskRegistry + SwarmCoordinator from core.swarm.
+    # Explicitly disable coordinator env-var so the two modes never overlap.
     _swarm_registry: SwarmRegistry | None = None
     _swarm_coordinator_obj: SwarmCoordinator | None = None
     if args.swarm:
+        set_coordinator_mode(False)   # clear CC_MINI_COORDINATOR if set from a previous run
         _swarm_registry = SwarmRegistry()
         _swarm_coordinator_obj = SwarmCoordinator(_swarm_registry)
+
+    # Coordinator mode also uses core.swarm tools (same AgentTool, separate registry)
+    _coord_registry: SwarmRegistry | None = None
+    _coord_coordinator_obj: SwarmCoordinator | None = None
+    if args.coordinator:
+        _coord_registry = SwarmRegistry()
+        _coord_coordinator_obj = SwarmCoordinator(_coord_registry)
 
     def _build_base_tools() -> list:
         return [
@@ -209,53 +216,6 @@ def main() -> None:
         sandbox_manager=sandbox_mgr,
     )
 
-    def _build_worker_engine() -> Engine:
-        worker_permissions = PermissionChecker(
-            auto_approve=True,
-            sandbox_manager=sandbox_mgr,
-        )
-        worker_prompt = build_system_prompt(cwd=cwd, model=app_config.model, memory_dir=memory_dir)
-        if skills_section:
-            worker_prompt += "\n\n" + skills_section
-        worker_prompt += "\n\n" + get_worker_system_prompt()
-        return Engine(
-            tools=_build_base_tools(),
-            system_prompt=worker_prompt,
-            permission_checker=worker_permissions,
-            provider=app_config.provider,
-            api_key=app_config.api_key,
-            base_url=app_config.base_url,
-            model=app_config.model,
-            max_tokens=app_config.max_tokens,
-            effort=app_config.effort,
-        )
-
-    def _build_plan_worker_engine() -> Engine:
-        """Build a read-only worker engine for plan-mode subagents."""
-        worker_permissions = PermissionChecker(
-            auto_approve=True,
-            sandbox_manager=sandbox_mgr,
-        )
-        worker_prompt = build_system_prompt(cwd=cwd, model=app_config.model, memory_dir=memory_dir)
-        worker_prompt += (
-            "\n\nYou are a read-only exploration agent. "
-            "Use Glob, Grep, Read, and Bash (read-only commands only) to research the codebase. "
-            "Report your findings clearly and concisely."
-        )
-        return Engine(
-            tools=[FileReadTool(), GlobTool(), GrepTool(), BashTool(sandbox_manager=sandbox_mgr)],
-            system_prompt=worker_prompt,
-            permission_checker=worker_permissions,
-            provider=app_config.provider,
-            api_key=app_config.api_key,
-            base_url=app_config.base_url,
-            model=app_config.model,
-            max_tokens=app_config.max_tokens,
-            effort=app_config.effort,
-        )
-
-    worker_manager = WorkerManager(build_worker_engine=_build_worker_engine)
-
     # Plan mode manager
     from features.plan import PlanModeManager
     from tools.plan_tools import EnterPlanModeTool, ExitPlanModeTool
@@ -269,7 +229,7 @@ def main() -> None:
             ExitPlanModeTool(plan_manager),
         ])
         if _swarm_coordinator_obj is not None and _swarm_registry is not None:
-            # Swarm mode: use richer multi-type agents backed by core.swarm
+            # Swarm mode: multi-type agents (researcher, implementer, verifier, general-purpose)
             tools.extend(build_swarm_tools(
                 registry=_swarm_registry,
                 coordinator=_swarm_coordinator_obj,
@@ -278,12 +238,16 @@ def main() -> None:
                 api_key=app_config.api_key,
                 base_url=app_config.base_url,
             ))
-        elif coordinator_enabled:
-            tools.extend([
-                AgentTool(worker_manager),
-                SendMessageTool(worker_manager),
-                TaskStopTool(worker_manager),
-            ])
+        elif coordinator_enabled and _coord_coordinator_obj is not None and _coord_registry is not None:
+            # Coordinator mode: same swarm tools, separate registry
+            tools.extend(build_swarm_tools(
+                registry=_coord_registry,
+                coordinator=_coord_coordinator_obj,
+                provider=app_config.provider,
+                model=app_config.model,
+                api_key=app_config.api_key,
+                base_url=app_config.base_url,
+            ))
         return tools
 
     coordinator_enabled = is_coordinator_mode()
@@ -313,7 +277,7 @@ def main() -> None:
         advisor_model=app_config.advisor_model,
         advisor_max_uses=app_config.advisor_max_uses,
     )
-    plan_manager.bind_engine(engine, build_plan_worker_engine=_build_plan_worker_engine)
+    plan_manager.bind_engine(engine)
     plan_manager.set_permissions(permissions)
     permissions.set_plan_manager(plan_manager)
     compact_service = CompactService(
@@ -368,10 +332,11 @@ def main() -> None:
     if args.print or args.prompt:
         prompt_text = args.prompt or sys.stdin.read()
         run_query(engine, parse_input(prompt_text), print_mode=args.print, permissions=permissions)
-        if worker_manager.has_running_tasks():
+        _active_registry = _swarm_registry or _coord_registry
+        if _active_registry is not None and _active_registry.get_running():
             console.print(
-                "\n[dim]Background workers are still running. Use interactive mode "
-                "to receive coordinator task notifications.[/dim]"
+                "\n[dim]Background agents are still running. Use interactive mode "
+                "to receive task notifications.[/dim]"
             )
         if cost_tracker.total_cost_usd > 0:
             console.print(f"\n[dim]{cost_tracker.format_cost()}[/dim]")
@@ -535,21 +500,18 @@ def main() -> None:
                 if not _parse_and_display(notification, is_swarm=True):
                     return
 
-        # Drain coordinator / plan-mode worker notifications
-        managers_to_drain = []
-        if is_coordinator_mode():
-            managers_to_drain.append(worker_manager)
-        plan_wm = plan_manager.worker_manager
-        if plan_wm is not None:
-            managers_to_drain.append(plan_wm)
-        for mgr in managers_to_drain:
-            while True:
-                notifications = mgr.drain_notifications()
-                if not notifications:
-                    break
-                for notification in notifications:
-                    if not _parse_and_display(notification, is_swarm=False):
-                        return
+        # Drain coordinator mode notifications
+        if _coord_coordinator_obj is not None and is_coordinator_mode():
+            for notification in _coord_coordinator_obj.drain_notifications():
+                if not _parse_and_display(notification, is_swarm=False):
+                    return
+
+        # Drain plan-mode agent notifications
+        plan_coord = plan_manager.plan_coordinator
+        if plan_coord is not None:
+            for notification in plan_coord.drain_notifications():
+                if not _parse_and_display(notification, is_swarm=False):
+                    return
 
     def _show_worker_status() -> None:
         """Show running worker/swarm-agent status before prompt."""
@@ -569,26 +531,38 @@ def main() -> None:
                         f"  [dim]{uses} tool use{'s' if uses != 1 else ''}[/dim]"
                     )
 
-        # Coordinator / plan-mode workers
-        all_statuses = []
-        if is_coordinator_mode():
-            all_statuses.extend(worker_manager.get_running_status())
-        plan_wm = plan_manager.worker_manager
-        if plan_wm is not None:
-            all_statuses.extend(plan_wm.get_running_status())
-        if not all_statuses:
-            return
-        n = len(all_statuses)
-        console.print(
-            f"[bold cyan]⟳ {n} sub-agent{'s' if n > 1 else ''} running in background[/bold cyan]"
-        )
-        for s in all_statuses:
-            uses = s["tool_uses"]
-            activity = s["activity"] or "working…"
-            console.print(
-                f"  [cyan]◎[/cyan] [cyan]{s['description']}[/cyan]"
-                f"  [dim]{uses} tool use{'s' if uses != 1 else ''} · {activity}[/dim]"
-            )
+        # Coordinator mode: display live agents from its registry
+        if _coord_registry is not None and is_coordinator_mode():
+            coord_running = _coord_registry.get_running()
+            if coord_running:
+                n = len(coord_running)
+                console.print(
+                    f"[bold cyan]⟳ {n} sub-agent{'s' if n > 1 else ''} running in background[/bold cyan]"
+                )
+                for task in coord_running:
+                    uses = task.tool_use_count
+                    console.print(
+                        f"  [cyan]◎[/cyan] [dim]{task.task_id}[/dim]  "
+                        f"[cyan]{task.description}[/cyan]"
+                        f"  [dim]{uses} tool use{'s' if uses != 1 else ''}[/dim]"
+                    )
+
+        # Plan-mode: display live agents from plan registry
+        plan_reg = plan_manager.plan_registry
+        if plan_reg is not None:
+            plan_running = plan_reg.get_running()
+            if plan_running:
+                n = len(plan_running)
+                console.print(
+                    f"[bold cyan]⟳ {n} plan agent{'s' if n > 1 else ''} running[/bold cyan]"
+                )
+                for task in plan_running:
+                    uses = task.tool_use_count
+                    console.print(
+                        f"  [cyan]◎[/cyan] [dim]{task.task_id}[/dim]  "
+                        f"[cyan]{task.description}[/cyan]"
+                        f"  [dim]{uses} tool use{'s' if uses != 1 else ''}[/dim]"
+                    )
 
     while True:
         _drain_worker_notifications()

@@ -459,15 +459,15 @@ def build_swarm_tools(
 def _get_base_tools() -> list[Tool]:
     """
     Load the standard base tool set (Read, Write, Edit, Bash, Glob, Grep).
-    Returns an empty list if the core tools module is unavailable.
+    Returns an empty list if the tools module is unavailable.
     """
     try:
-        from core.tools.file_read import FileReadTool
-        from core.tools.file_write import FileWriteTool
-        from core.tools.file_edit import FileEditTool
-        from core.tools.bash import BashTool
-        from core.tools.glob_tool import GlobTool
-        from core.tools.grep_tool import GrepTool
+        from tools.file_read import FileReadTool
+        from tools.file_write import FileWriteTool
+        from tools.file_edit import FileEditTool
+        from tools.bash import BashTool
+        from tools.glob_tool import GlobTool
+        from tools.grep_tool import GrepTool
         return [
             FileReadTool(),
             FileWriteTool(),
