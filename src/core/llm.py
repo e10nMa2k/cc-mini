@@ -7,6 +7,17 @@ from typing import Any, Iterator
 import anthropic
 import httpx
 
+from dotenv import load_dotenv
+import os
+
+load_dotenv(dotenv_path="../../.env")
+API_KEY = os.getenv("API_KEY", "")
+BASE_URL = os.getenv("API_BASE_URL", "")
+print(API_KEY)
+print(BASE_URL)
+#provider_model = "deepseek#deepseek-v4-flash"
+provider_model = "tongyi#deepseek-v3.2"
+default_provider, default_model = provider_model.split("#")
 
 _OPENAI_IMPORT_ERROR: Exception | None = None
 
@@ -51,7 +62,9 @@ def default_model_for_provider(provider: str) -> str:
     provider = validate_provider(provider)
     if provider == _OPENAI_PROVIDER:
         #return "gpt-4.1-mini"
-        return "deepseek-v3.2"
+        #return "deepseek-v3.2"
+        # deepseek#deepseek-v4-flash
+        return default_model
     return "claude-sonnet-4-20250514"
 
 
@@ -95,11 +108,11 @@ class LLMClient:
                 raise ValueError(message)
             #self._client = OpenAI(api_key=api_key, base_url=base_url)
             # 我的主要修改
-            api_key="sk-sx7samRq1eON0NTQwM0kWM4UoZmERAk4KMKG4LV64M2CbuYd"
-            base_url="http://model.mify.ai.srv/v1"
+            api_key=API_KEY
+            base_url=BASE_URL
             default_headers = {
                         "Authorization": f"Bearer {api_key}",
-                        "X-Model-Provider-Id": "tongyi",
+                        "X-Model-Provider-Id": default_provider,
                         "X-Model-Request-Id": "1234",
                         "Content-Type": "application/json"
             }
@@ -621,3 +634,8 @@ def _value(obj: Any, key: str, default: Any = None) -> Any:
     if isinstance(obj, dict):
         return obj.get(key, default)
     return getattr(obj, key, default)
+
+
+if __name__ == "__main__":
+    print(API_KEY)
+    print(BASE_URL)
