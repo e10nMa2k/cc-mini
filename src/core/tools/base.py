@@ -4,11 +4,11 @@ from dataclasses import dataclass
 
 @dataclass
 class ToolResult:
-    content: str
+    content: str # 返回内容, 可能会被截断
     is_error: bool = False
 
 
-class Tool(ABC):
+class Tool(ABC): # ABC = Abstract Base Class， 抽象基类
     @property
     @abstractmethod
     def name(self) -> str: ...

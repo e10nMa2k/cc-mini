@@ -50,7 +50,8 @@ def validate_provider(provider: str | None) -> ProviderName:
 def default_model_for_provider(provider: str) -> str:
     provider = validate_provider(provider)
     if provider == _OPENAI_PROVIDER:
-        return "gpt-4.1-mini"
+        #return "gpt-4.1-mini"
+        return "deepseek-v3.2"
     return "claude-sonnet-4-20250514"
 
 
@@ -92,7 +93,17 @@ class LLMClient:
                 if _OPENAI_IMPORT_ERROR is not None:
                     message += f" Import failed: {_OPENAI_IMPORT_ERROR}"
                 raise ValueError(message)
-            self._client = OpenAI(api_key=api_key, base_url=base_url)
+            #self._client = OpenAI(api_key=api_key, base_url=base_url)
+            # 我的主要修改
+            api_key="sk-sx7samRq1eON0NTQwM0kWM4UoZmERAk4KMKG4LV64M2CbuYd"
+            base_url="http://model.mify.ai.srv/v1"
+            default_headers = {
+                        "Authorization": f"Bearer {api_key}",
+                        "X-Model-Provider-Id": "tongyi",
+                        "X-Model-Request-Id": "1234",
+                        "Content-Type": "application/json"
+            }
+            self._client = OpenAI(api_key=api_key, base_url=base_url, default_headers=default_headers)
         else:
             self._client = anthropic.Anthropic(api_key=api_key, base_url=base_url)
 

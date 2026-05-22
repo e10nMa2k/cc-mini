@@ -84,14 +84,14 @@ def try_acquire_lock(memory_dir: Path) -> bool:
     try:
         stat = lp.stat()
         age = datetime.now().timestamp() - stat.st_mtime
-        holder_pid = int(lp.read_text().strip())
+        holder_pid = int(lp.read_text().strip()) # 查看lock文件中的 pid
         # If holder is alive and lock is fresh, back off
         if age < HOLDER_STALE_S:
             try:
-                os.kill(holder_pid, 0)  # probe only
-                return False
+                os.kill(holder_pid, 0)  # probe only, os.kill(pid, 0) 不发送实际信号，只是检查进程是否存在
+                return False # # 进程存活，获取锁失败
             except OSError:
-                pass  # holder dead, reclaim
+                pass  # holder dead, reclaim,  锁文件不存在、损坏或过期，继续执行,  进程已死，可以接管锁
     except (OSError, ValueError):
         pass  # no lock or corrupt — take it
 
@@ -278,7 +278,19 @@ def build_dream_prompt(memory_dir: Path) -> str:
     """Build the 4-phase consolidation prompt for the dream agent.
 
     Mirrors Claude Code's consolidationPrompt.ts structure.
+
+    做梦，用来加强记忆，把每天的日记整理成主题文件和MEMORY.md索引。
+
+
+    这个函数的核心是设计了一套让 AI 代理执行“记忆巩固”的流程，灵感可能来自人类睡眠中的记忆整合过程（因此函数名和内部提示词都使用了“梦境”、“KAIROS”等意象）：
+
+    定向 (Orient)：了解当前已有的记忆结构。
+    收集 (Gather)：读取新的原始日志信息。
+    整合 (Consolidate)：将新信息与旧信息融合、去重、结构化，生成或更新独立的主题文件。这里对文件格式（YAML frontmatter）和内容结构（规则、原因、应用方式）做了明确要求，以确保记忆可以被机器有效检索和理解。
+    索引 (Prune and index)：更新一个精简的主索引文件 (MEMORY.md)，方便快速定位相关主题文件，同时控制其大小以避免上下文过长。
+    这种设计是实现 AI 长期记忆与知识管理的典型模式。
     """
+
     return f"""\
 You are running a KAIROS dream consolidation. Your job is to read daily logs \
 and existing memories, then produce consolidated topic files and an updated \

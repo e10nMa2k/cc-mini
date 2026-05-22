@@ -23,7 +23,41 @@ from pathlib import Path
 
 from .config import SandboxConfig
 
+"""
+Bubblewrap 是一个轻量级的 Linux 沙盒工具，由 Flatpak 项目开发，专注于为非特权用户提供安全的容器隔离能力。它利用 Linux 内核的命名空间（namespaces）技术创建隔离的执行环境，但相比 Docker 等完整容器方案，Bubblewrap 的代码库极小、设计简洁、启动速度极快
 
+
+这个代码构建了一个安全的命令执行沙箱，使用 bwrap (Bubblewrap) 来隔离和控制命令的访问权限。
+
+真实文件系统                    沙箱视图
+/ (全局)          →    / (只读)
+/home/user/docs   →    /home/user/docs (可写，如果在allow_write中)
+/etc/passwd       →    /etc/passwd (只读，即使在allow_write中)
+/secret/data      →    /secret/data (空目录，不可见)
+
+
+config = SandboxConfig(
+    filesystem=FilesystemConfig(
+        allow_write=["./output", "./temp"],      # 只允许写入这些目录
+        deny_write=["./config", "./.env"],       # 强制只读敏感文件
+        deny_read=["./secret", "./keys"],        # 完全隐藏机密文件
+    ),
+    unshare_net=True,  # 禁用网络
+)
+
+command = "python script.py --process-data"
+bwrap_cmd = wrap_command(command, config, cwd="/home/user/project")
+
+# 实际执行的命令：
+# bwrap --ro-bind / / --dev /dev --proc /proc --tmpfs /tmp \
+#   --bind /home/user/project/output /home/user/project/output \
+#   --ro-bind /home/user/project/.env /home/user/project/.env \
+#   --tmpfs /home/user/project/secret \
+#   --bind /home/user/project /home/user/project --chdir /home/user/project \
+#   --unshare-net --die-with-parent --unshare-pid \
+#   --ro-bind /home/user/project/.cc-mini.toml /home/user/project/.cc-mini.toml \
+#   -- /bin/sh -c "python script.py --process-data"
+"""
 def build_bwrap_args(
     command: str,
     config: SandboxConfig,

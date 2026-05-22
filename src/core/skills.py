@@ -57,7 +57,7 @@ class Skill:
         if self.skill_root:
             text = text.replace("${CLAUDE_SKILL_DIR}", self.skill_root)
         if args and self.argument_hint:
-            text = text.replace(f"${{{self.argument_hint}}}", args)
+            text = text.replace(f"${{{self.argument_hint}}}", args) # 在 Python f-string 中，{{ 和 }} 被用来输出字面花括号 { 和 }。
         return text
 
 

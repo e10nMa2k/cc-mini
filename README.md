@@ -4,6 +4,9 @@
 
 **Ultra-light Harness scaffolding for AI agents**
 
+Claude Code is a powerful AI agent that can write code, research, and implement tasks. cc-mini is a lightweight harness for Claude Code that adds features like interactive REPL, session persistence, and permission system.
+注意：仅作为代码助手
+
 **Agentic** &nbsp;·&nbsp; **Built to Extend** &nbsp;·&nbsp; **From Claude Code**
 <br>
 
@@ -182,6 +185,7 @@ src/core/
 ```bash
 pytest tests/ -v
 pytest tests/ -v -k "not integration"  # skip bwrap tests
+pytest tests/test_tools.py # 执行某个单测
 ```
 
 ---

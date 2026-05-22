@@ -3,7 +3,7 @@ from .base import Tool, ToolResult
 
 
 class FileReadTool(Tool):
-    name = "Read"
+    name = "Read" # Tool抽象类的属性
     description = (
         "Reads a file from the local filesystem. "
         "Returns content with line numbers (1-indexed). "

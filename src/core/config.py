@@ -25,8 +25,12 @@ from .llm import (
 
 load_dotenv()
 
-DEFAULT_PROVIDER = "anthropic"
+#DEFAULT_PROVIDER = "anthropic"
+#DEFAULT_MODEL = default_model_for_provider(DEFAULT_PROVIDER)
+
+DEFAULT_PROVIDER = "openai"
 DEFAULT_MODEL = default_model_for_provider(DEFAULT_PROVIDER)
+
 _ANTHROPIC_FALLBACK_MAX_TOKENS = 32000
 _OPENAI_FALLBACK_MAX_TOKENS = default_max_tokens_for_provider("openai")
 _MODEL_ALIASES = {

@@ -99,8 +99,9 @@ def _normalize_message_content(content: Any) -> Any:
 class Engine:
     def __init__(self, tools: list[Tool], system_prompt: str,
                  permission_checker: PermissionChecker,
-                 provider: str = "anthropic",
-                 model: str = DEFAULT_MODEL,
+                 provider: str = "openai",
+                 #model: str = DEFAULT_MODEL,
+                 model: str = "",
                  max_tokens: int | None = None,
                  api_key: str | None = None,
                  base_url: str | None = None,
@@ -109,6 +110,7 @@ class Engine:
                  cost_tracker: CostTracker | None = None):
         self._provider = provider
         self._model = resolve_model(model, provider=provider)
+
         self._max_tokens = max_tokens or default_max_tokens_for_model(
             self._model,
             provider=provider,
@@ -235,7 +237,7 @@ class Engine:
         """Send user message; yield events until the conversation turn completes.
 
         Yields:
-          ("text", str)                         — streamed text chunk
+          ("text", str)                         — streamed text chunk, 流式响应
           ("tool_call", name, input)            — before each tool executes
           ("tool_result", name, input, result)  — after each tool executes
           ("waiting",)                          — text done, waiting for tool_use
@@ -243,6 +245,31 @@ class Engine:
 
         Raises:
           AbortedError — if abort() was called (by Esc listener or Ctrl+C)
+        
+        while True:
+            final = call_llm()  # 调用 LLM
+            tool_uses = extract_tool_calls(final)
+            
+            if not tool_uses:
+                break  # 没有工具调用，结束循环
+            
+            # 执行所有工具
+            for tool_use in tool_uses:
+                result = self._execute_tool(tool_use)
+                tool_results.append(result)
+            
+            # 将工具结果添加回对话
+            self._messages.append({
+                "role": "user",
+                "content": tool_results
+            })
+            # 继续循环，让 LLM 处理工具结果
+
+            示例;
+            用户: "读取 test.txt 文件"
+            AI: [tool_use: read_file]
+            工具: [tool_result: "file content"]
+            AI: "文件内容是：..."
         """
         self._aborted = False
         self._turn_start_len = len(self._messages)
@@ -288,7 +315,7 @@ class Engine:
 
                             final = stream.get_final_message()
                             _api_elapsed = time.monotonic() - _api_t0
-                            # Track token usage / cost
+                            # Track token usage / cost, 成本追踪
                             if final.usage and self._cost_tracker:
                                 self._cost_tracker.add_usage(self._model, {
                                     "input_tokens": getattr(final.usage, "input_tokens", 0) or 0,
@@ -340,12 +367,13 @@ class Engine:
 
                 if not tool_uses:
                     break
-
+                # 调用工具,如有
                 tool_results = []
                 for tool_use in tool_uses:
                     if self._aborted:
                         raise AbortedError()
                     yield ("tool_call", _block_name(tool_use), _block_input(tool_use))
+                    # 执行工具并拿到结果
                     result = self._execute_tool(tool_use)
                     yield ("tool_result", _block_name(tool_use), _block_input(tool_use), result)
                     tool_results.append({
@@ -422,8 +450,10 @@ def _block_id(block: Any) -> str:
         return str(block.get("id", ""))
     return str(getattr(block, "id", ""))
 
-
 def _block_input(block: Any) -> dict[str, Any]:
+    """
+    获取block的input
+    """
     if isinstance(block, dict):
         value = block.get("input", {})
     else:

@@ -990,6 +990,7 @@ def main() -> None:
                 console.print("\n[dim]Auto-dream triggered (enough time + sessions since last consolidation)…[/dim]")
                 _run_dream(engine, memory_dir, permissions)
                 release_lock(memory_dir)
+    # End of while REPL loop
 
     # Print cost summary on exit
     if cost_tracker.total_cost_usd > 0:
