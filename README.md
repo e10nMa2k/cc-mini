@@ -251,3 +251,43 @@ pytest tests/ -v -k "not integration"  # skip bwrap tests
 | KAIROS Memory System | [docs/memory.md](docs/memory.md) |
 | Skills (custom workflows) | [docs/skills.md](docs/skills.md) |
 | Sandbox (bash isolation) | [docs/sandbox.md](docs/sandbox.md) |
+
+
+## FAQ
+
+### What is cc-mini?
+
+cc-mini is an AI agent-related project in the AI agent ecosystem.
+
+### Key Features
+
+| Feature | Description |
+|---------|-------------|
+| **AI Agent Integration** | Works with AI agents and agent frameworks |
+| **Automation** | Automates workflows and tasks |
+| **Extensible** | Plugin-based architecture for customization |
+
+### Installation
+
+```bash
+# Clone the repository
+git clone https://github.com/e10nMa2k/cc-mini.git
+cd cc-mini
+
+# Follow project-specific installation instructions
+```
+
+### Requirements
+
+- Node.js 18+ / Python 3.10+ (depending on project)
+- Git
+- Basic understanding of AI agents
+
+### License
+
+Check the project repository for license information.
+
+### Help & Resources
+
+- [Issues](https://github.com/e10nMa2k/cc-mini/issues) - Report bugs and request features
+- [Documentation](https://github.com/e10nMa2k/cc-mini#readme) - Project README
