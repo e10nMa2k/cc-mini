@@ -2,6 +2,7 @@
 
 import tempfile
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -13,6 +14,8 @@ from features.skills import (
     clear_skills,
     discover_skills,
     get_skill,
+    is_model_invocable,
+    list_model_invocable_skills,
     list_skills,
     load_skills_from_dir,
     register_skill,
@@ -82,6 +85,21 @@ class TestParseFrontmatter:
         )
         assert meta == {"name": "ok"}
 
+    @pytest.mark.parametrize(
+        ("line", "expected"),
+        [
+            ("allowed-tools:", []),
+            ("allowed-tools: []", []),
+            ("allowed-tools: [Bash, Read]", ["Bash", "Read"]),
+            ('allowed-tools: ["Bash", "Read"]', ["Bash", "Read"]),
+            ("allowed-tools: true", []),
+            ("allowed-tools: false", []),
+        ],
+    )
+    def test_allowed_tools_supported_frontmatter_forms(self, line, expected):
+        meta, _ = _parse_frontmatter(f"---\n{line}\n---\nbody")
+        assert meta["allowed_tools"] == expected
+
 
 # -----------------------------------------------------------------------
 # Skill data structure
@@ -103,6 +121,7 @@ class TestSkill:
         assert skill.name == "deploy"  # frontmatter name takes priority
         assert skill.context == "fork"
         assert skill.allowed_tools == ["Bash"]
+        assert skill.allowed_tools_declared is True
         assert skill.model == "claude-sonnet-4"
         assert skill.skill_root == "/tmp/sk"
 
@@ -128,6 +147,32 @@ class TestSkill:
             _prompt_fn=lambda a: "from_fn",
         )
         assert skill.get_prompt("") == "from_fn"
+
+    def test_invocation_metadata_defaults(self):
+        skill = _skill_from_frontmatter({}, "body", "legacy", "project")
+        assert skill.model_invocable is False
+        assert skill.allowed_tools_declared is False
+        assert skill.allowed_tools == []
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("", []),
+            ("[]", []),
+            (True, []),
+            (False, []),
+            ("Bash, Read", ["Bash", "Read"]),
+            ("[Bash, Read]", ["Bash", "Read"]),
+            ('["Bash", "Read"]', ["Bash", "Read"]),
+            ("['Bash', 'Read']", ["Bash", "Read"]),
+        ],
+    )
+    def test_allowed_tools_normalization(self, raw, expected):
+        skill = _skill_from_frontmatter(
+            {"allowed_tools": raw}, "body", "skill", "project"
+        )
+        assert skill.allowed_tools_declared is True
+        assert skill.allowed_tools == expected
 
 
 # -----------------------------------------------------------------------
@@ -163,6 +208,41 @@ class TestRegistry:
         clear_skills(source="project")
         assert get_skill("a") is not None
         assert get_skill("b") is None
+
+    @pytest.mark.parametrize(
+        ("model_invocable", "declared", "disabled", "expected"),
+        [
+            (True, True, False, True),
+            (False, True, False, False),
+            (True, False, False, False),
+            (True, True, True, False),
+        ],
+    )
+    def test_model_invocation_eligibility(
+        self, model_invocable, declared, disabled, expected
+    ):
+        skill = Skill(
+            name="candidate",
+            model_invocable=model_invocable,
+            allowed_tools_declared=declared,
+            disable_model_invocation=disabled,
+        )
+        assert is_model_invocable(skill) is expected
+
+    def test_list_model_invocable_skills_preserves_registry_ordering(self):
+        register_skill(Skill(
+            name="project", source="project", model_invocable=True,
+            allowed_tools_declared=True,
+        ))
+        register_skill(Skill(
+            name="bundled", source="bundled", model_invocable=True,
+            allowed_tools_declared=True,
+        ))
+        register_skill(Skill(name="manual"))
+
+        assert [s.name for s in list_model_invocable_skills()] == [
+            "bundled", "project",
+        ]
 
 
 # -----------------------------------------------------------------------
@@ -214,6 +294,10 @@ class TestBundledSkills:
         register_bundled_skills()
         for s in list_skills():
             assert s.source == "bundled"
+
+    def test_bundled_skills_remain_manual_only_by_default(self):
+        register_bundled_skills()
+        assert list_model_invocable_skills() == []
 
 
 # -----------------------------------------------------------------------
@@ -287,6 +371,14 @@ class TestLoadFromDisk:
         load_skills_from_dir(tmp_path)
         assert get_skill("myskill").skill_root == str(d)
 
+    def test_legacy_skill_remains_manually_available(self, tmp_path):
+        (tmp_path / "legacy.md").write_text("---\nname: legacy\n---\nRun it.")
+        load_skills_from_dir(tmp_path)
+
+        skill = get_skill("legacy")
+        assert skill in list_skills(user_invocable_only=True)
+        assert skill not in list_model_invocable_skills()
+
 
 # -----------------------------------------------------------------------
 # discover_skills
@@ -320,6 +412,16 @@ class TestPromptSection:
         assert "# Available Skills" in section
         assert "/deploy: Deploy app" in section
         assert "— After testing" in section
+
+    def test_prompt_still_lists_manual_and_model_invocable_skills(self):
+        register_skill(Skill(name="manual", description="Manual"))
+        register_skill(Skill(
+            name="automatic", description="Automatic", model_invocable=True,
+            allowed_tools_declared=True,
+        ))
+        section = build_skills_prompt_section()
+        assert "/manual: Manual" in section
+        assert "/automatic: Automatic" in section
 
 
 # -----------------------------------------------------------------------
@@ -378,3 +480,23 @@ class TestCommandParsing:
     def test_non_slash_not_parsed(self):
         from commands import parse_command
         assert parse_command("hello") is None
+
+    def test_manual_execution_ignores_model_eligibility(self, monkeypatch):
+        from commands import CommandContext, handle_command
+
+        skill = Skill(name="manual", _prompt_text="Run manually")
+        register_skill(skill)
+        run_query = MagicMock()
+        monkeypatch.setattr("tui.query.run_query", run_query)
+        engine = MagicMock()
+        engine.get_messages.return_value = []
+        ctx = CommandContext(
+            engine=engine,
+            session_store=None,
+            compact_service=MagicMock(),
+            console=MagicMock(),
+            app_config=MagicMock(),
+        )
+
+        assert handle_command("manual", "", ctx) is True
+        run_query.assert_called_once()

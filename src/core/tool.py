@@ -30,6 +30,10 @@ class Tool(ABC):
         """Return a human-readable description of what the tool is doing, shown in the spinner."""
         return None
 
+    def abort(self) -> None:
+        """Best-effort cancellation hook for an active tool execution."""
+        return None
+
     def is_read_only(self) -> bool:
         return False
 

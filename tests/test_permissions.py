@@ -75,3 +75,55 @@ def test_dream_mode_denies_sibling_directory_with_same_prefix(tmp_path):
             "new_string": "y",
         },
     ) == "deny"
+
+
+def test_fork_copies_effective_policy_and_isolates_mutable_state(tmp_path):
+    sandbox = object()
+    listener = object()
+    checker = PermissionChecker(auto_approve=True, sandbox_manager=sandbox)
+    checker._always_allow.add("Bash")
+    checker.set_esc_listener(listener)
+    checker._mode = "plan"
+    checker._pre_plan_mode = "default"
+    checker._pre_plan_always_allow = {"Write"}
+    checker.enter_dream_mode(str(tmp_path))
+    checker._plan_manager = object()
+
+    child = checker.fork()
+
+    assert child is not checker
+    assert child._auto_approve is True
+    assert child._sandbox is sandbox
+    assert child._esc_listener is listener
+    assert child._mode == "plan"
+    assert child._pre_plan_mode == "default"
+    assert child._dream_mode is True
+    assert child._dream_memory_dir == str(tmp_path.resolve())
+    assert child._plan_manager is None
+    assert child._always_allow == {"Bash"}
+    assert child._pre_plan_always_allow == {"Write"}
+
+    child._always_allow.add("Edit")
+    child._pre_plan_always_allow.add("Bash")
+    assert checker._always_allow == {"Bash"}
+    assert checker._pre_plan_always_allow == {"Write"}
+
+
+def test_forked_plan_mode_cannot_use_parent_plan_file_exception(tmp_path):
+    plan_file = tmp_path / "plan.md"
+
+    class PlanManager:
+        plan_file_path = str(plan_file)
+
+    checker = PermissionChecker()
+    checker.set_plan_manager(PlanManager())
+    checker.enter_plan_mode()
+    child = checker.fork()
+    inputs = {
+        "file_path": str(plan_file),
+        "old_string": "x",
+        "new_string": "y",
+    }
+
+    assert checker.check(FileEditTool(), inputs) == "allow"
+    assert child.check(FileEditTool(), inputs) == "deny"

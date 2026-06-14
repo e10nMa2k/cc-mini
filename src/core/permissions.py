@@ -57,6 +57,28 @@ class PermissionChecker:
     def set_esc_listener(self, listener: EscListener | None):
         self._esc_listener = listener
 
+    def fork(self) -> PermissionChecker:
+        """Copy the effective permission policy without sharing mutable state."""
+        child = PermissionChecker(
+            auto_approve=self._auto_approve,
+            sandbox_manager=self._sandbox,
+        )
+        child._always_allow = set(self._always_allow)
+        child._esc_listener = self._esc_listener
+        child._mode = self._mode
+        child._pre_plan_mode = self._pre_plan_mode
+        child._pre_plan_always_allow = (
+            set(self._pre_plan_always_allow)
+            if self._pre_plan_always_allow is not None
+            else None
+        )
+        child._dream_mode = self._dream_mode
+        child._dream_memory_dir = self._dream_memory_dir
+        # A child may preserve plan restrictions, but it cannot inherit plan-file
+        # write exceptions from the parent's PlanModeManager.
+        child._plan_manager = None
+        return child
+
     @property
     def mode(self) -> str:
         return self._mode

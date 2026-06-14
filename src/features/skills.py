@@ -33,8 +33,10 @@ class Skill:
     description: str = ""
     when_to_use: str = ""
     user_invocable: bool = True
+    model_invocable: bool = False
     disable_model_invocation: bool = False
     allowed_tools: list[str] = field(default_factory=list)
+    allowed_tools_declared: bool = False
     model: str | None = None
     context: str = "inline"          # "inline" or "fork"
     argument_hint: str = ""
@@ -91,6 +93,12 @@ def _parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
         key, _, val = line.partition(":")
         key = key.strip().lower().replace("-", "_")
         val = val.strip()
+        if key in {"allowed_tools", "paths"}:
+            meta[key] = _normalize_string_list(
+                val,
+                reject_boolean=key == "allowed_tools",
+            )
+            continue
         # Boolean
         if val.lower() in ("true", "yes"):
             meta[key] = True
@@ -118,25 +126,61 @@ def _ensure_str(val: Any, default: str = "") -> str:
     return str(val)
 
 
+def _normalize_string_list(
+    val: Any,
+    *,
+    reject_boolean: bool = False,
+) -> list[str]:
+    """Normalize the small list syntax supported by SKILL.md frontmatter."""
+    if val is None:
+        return []
+    if reject_boolean and isinstance(val, bool):
+        return []
+    if isinstance(val, list):
+        items = val
+    else:
+        text = str(val).strip()
+        if not text or text == "[]":
+            return []
+        if reject_boolean and text.lower() in {"true", "false", "yes", "no"}:
+            return []
+        if text.startswith("[") and text.endswith("]"):
+            text = text[1:-1].strip()
+        if not text:
+            return []
+        items = text.split(",")
+
+    normalized: list[str] = []
+    for item in items:
+        name = str(item).strip()
+        if ((name.startswith('"') and name.endswith('"'))
+                or (name.startswith("'") and name.endswith("'"))):
+            name = name[1:-1].strip()
+        if name:
+            normalized.append(name)
+    return normalized
+
+
 def _skill_from_frontmatter(meta: dict[str, Any], body: str,
                              name: str, source: str,
                              skill_root: str | None = None) -> Skill:
     """Build a ``Skill`` from parsed frontmatter and body text."""
-    allowed = meta.get("allowed_tools", [])
-    if isinstance(allowed, str):
-        allowed = [t.strip() for t in allowed.split(",") if t.strip()]
-
-    paths = meta.get("paths", [])
-    if isinstance(paths, str):
-        paths = [p.strip() for p in paths.split(",") if p.strip()]
+    allowed_tools_declared = "allowed_tools" in meta
+    allowed = _normalize_string_list(
+        meta.get("allowed_tools"),
+        reject_boolean=True,
+    )
+    paths = _normalize_string_list(meta.get("paths"))
 
     return Skill(
         name=_ensure_str(meta.get("name"), name),
         description=_ensure_str(meta.get("description")),
         when_to_use=_ensure_str(meta.get("when_to_use")),
         user_invocable=meta.get("user_invocable", True),
+        model_invocable=meta.get("model_invocable", False),
         disable_model_invocation=meta.get("disable_model_invocation", False),
         allowed_tools=allowed,
+        allowed_tools_declared=allowed_tools_declared,
         model=meta.get("model"),
         context=_ensure_str(meta.get("context"), "inline"),
         argument_hint=_ensure_str(meta.get("arguments")),
@@ -170,6 +214,23 @@ def list_skills(user_invocable_only: bool = True) -> list[Skill]:
     if user_invocable_only:
         skills = [s for s in skills if s.user_invocable]
     return sorted(skills, key=lambda s: (s.source != "bundled", s.name))
+
+
+def is_model_invocable(skill: Skill) -> bool:
+    """Return whether *skill* explicitly opted into model invocation."""
+    return (
+        skill.model_invocable
+        and skill.allowed_tools_declared
+        and not skill.disable_model_invocation
+    )
+
+
+def list_model_invocable_skills() -> list[Skill]:
+    """Return model-invocable skills using the existing registry ordering."""
+    return [
+        skill for skill in list_skills(user_invocable_only=False)
+        if is_model_invocable(skill)
+    ]
 
 
 def clear_skills(source: str | None = None) -> None:

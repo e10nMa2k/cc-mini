@@ -1,6 +1,7 @@
 from unittest.mock import MagicMock, patch
+import threading
 import pytest
-from core.engine import Engine
+from core.engine import AbortedError, Engine
 from core.config import default_max_tokens_for_model
 from core.tool import Tool, ToolResult
 from core.permissions import PermissionChecker
@@ -65,6 +66,18 @@ def _make_tool_then_text_response(tool_name, tool_input, tool_use_id, text):
 
     second_stream = _make_text_response(text)
     return [first_stream, second_stream]
+
+
+def _make_tools_response(tool_uses):
+    from core.llm import LLMMessage, LLMUsage
+
+    first_final = LLMMessage(content=tool_uses, usage=LLMUsage())
+    first_stream = MagicMock()
+    first_stream.__enter__ = MagicMock(return_value=first_stream)
+    first_stream.__exit__ = MagicMock(return_value=False)
+    first_stream.text_stream = iter([])
+    first_stream.get_final_message = MagicMock(return_value=first_final)
+    return first_stream
 
 
 def test_engine_returns_text_events():
@@ -297,3 +310,213 @@ def test_engine_handles_mid_stream_error():
 
     text_events = [e for e in events if e[0] == "text"]
     assert any("success" in e[1] for e in text_events)
+
+
+# ---------------------------------------------------------------------------
+# Active sequential tool cancellation
+# ---------------------------------------------------------------------------
+
+class BlockingTool(Tool):
+    name = "Block"
+    description = "Blocks until aborted"
+    input_schema = {"type": "object", "properties": {}}
+
+    def __init__(self):
+        self.started = threading.Event()
+        self.release = threading.Event()
+        self.abort_calls = 0
+        self.execute_calls = 0
+
+    def execute(self) -> ToolResult:
+        self.execute_calls += 1
+        self.started.set()
+        if not self.release.wait(timeout=2):
+            raise RuntimeError("test did not release blocking tool")
+        return ToolResult(content="released")
+
+    def abort(self) -> None:
+        self.abort_calls += 1
+        self.release.set()
+
+
+class CountingTool(Tool):
+    name = "Count"
+    description = "Counts executions"
+    input_schema = {"type": "object", "properties": {}}
+
+    def __init__(self):
+        self.execute_calls = 0
+
+    def execute(self) -> ToolResult:
+        self.execute_calls += 1
+        return ToolResult(content="counted")
+
+
+class RaisingTool(Tool):
+    name = "Raise"
+    description = "Raises"
+    input_schema = {"type": "object", "properties": {}}
+
+    def execute(self) -> ToolResult:
+        raise RuntimeError("boom")
+
+
+def _engine_with_tools(tools):
+    return Engine(
+        tools=tools,
+        system_prompt="test",
+        permission_checker=PermissionChecker(auto_approve=True),
+    )
+
+
+def test_tool_default_abort_is_noop():
+    EchoTool().abort()
+    EchoTool().abort()
+
+
+def test_engine_abort_propagates_to_active_sequential_tool():
+    tool = BlockingTool()
+    engine = _engine_with_tools([tool])
+    stream = _make_tools_response([{
+        "type": "tool_use", "id": "tu_block", "name": "Block", "input": {},
+    }])
+    caught = []
+
+    def run():
+        try:
+            list(engine.submit("block"))
+        except AbortedError as exc:
+            caught.append(exc)
+
+    with patch.object(engine._client, "stream_messages", return_value=stream):
+        thread = threading.Thread(target=run)
+        thread.start()
+        assert tool.started.wait(timeout=2)
+        engine.abort()
+        thread.join(timeout=2)
+
+    assert not thread.is_alive()
+    assert tool.abort_calls == 1
+    assert caught
+    assert engine._get_active_tool() is None
+
+
+def test_engine_abort_with_no_active_tool_is_safe():
+    engine = _make_engine()
+    engine.abort()
+    engine.abort()
+    assert engine._get_active_tool() is None
+
+
+def test_abort_after_registration_prevents_tool_execute():
+    tool = BlockingTool()
+    engine = _engine_with_tools([tool])
+    stream = _make_tools_response([{
+        "type": "tool_use", "id": "tu_block", "name": "Block", "input": {},
+    }])
+    original_register = engine._register_active_tool
+
+    def register_then_abort(active_tool):
+        original_register(active_tool)
+        engine.abort()
+
+    with patch.object(engine, "_register_active_tool", side_effect=register_then_abort), \
+         patch.object(engine._client, "stream_messages", return_value=stream):
+        with pytest.raises(AbortedError):
+            list(engine.submit("block"))
+
+    assert tool.execute_calls == 0
+    assert tool.abort_calls == 1
+    assert engine._get_active_tool() is None
+
+
+def test_tool_exception_clears_active_reference():
+    engine = _engine_with_tools([RaisingTool()])
+    streams = [
+        _make_tools_response([{
+            "type": "tool_use", "id": "tu_raise", "name": "Raise", "input": {},
+        }]),
+        _make_text_response("done"),
+    ]
+
+    with patch.object(engine._client, "stream_messages", side_effect=streams):
+        events = list(engine.submit("raise"))
+
+    result = next(event[3] for event in events if event[0] == "tool_result")
+    assert result.is_error
+    assert engine._get_active_tool() is None
+
+
+def test_clear_active_tool_ignores_stale_reference():
+    first = BlockingTool()
+    second = CountingTool()
+    engine = _engine_with_tools([first, second])
+    engine._register_active_tool(first)
+
+    engine._clear_active_tool(second)
+    assert engine._get_active_tool() is first
+    engine._clear_active_tool(first)
+    assert engine._get_active_tool() is None
+
+
+def test_abort_prevents_next_sequential_tool_from_starting():
+    first = BlockingTool()
+    second = CountingTool()
+    engine = _engine_with_tools([first, second])
+    stream = _make_tools_response([
+        {"type": "tool_use", "id": "tu_1", "name": "Block", "input": {}},
+        {"type": "tool_use", "id": "tu_2", "name": "Count", "input": {}},
+    ])
+    caught = []
+
+    def run():
+        try:
+            list(engine.submit("run both"))
+        except AbortedError as exc:
+            caught.append(exc)
+
+    with patch.object(engine._client, "stream_messages", return_value=stream):
+        thread = threading.Thread(target=run)
+        thread.start()
+        assert first.started.wait(timeout=2)
+        engine.abort()
+        thread.join(timeout=2)
+
+    assert caught
+    assert second.execute_calls == 0
+
+
+def test_parallel_read_only_tools_do_not_use_active_slot():
+    barrier = threading.Barrier(2)
+    observed = []
+
+    class ReadOne(Tool):
+        name = "ReadOne"
+        description = "read one"
+        input_schema = {"type": "object", "properties": {}}
+
+        def is_read_only(self):
+            return True
+
+        def execute(self):
+            observed.append(engine._get_active_tool())
+            barrier.wait(timeout=2)
+            return ToolResult(content="one")
+
+    class ReadTwo(ReadOne):
+        name = "ReadTwo"
+
+    engine = _engine_with_tools([ReadOne(), ReadTwo()])
+    streams = [
+        _make_tools_response([
+            {"type": "tool_use", "id": "tu_1", "name": "ReadOne", "input": {}},
+            {"type": "tool_use", "id": "tu_2", "name": "ReadTwo", "input": {}},
+        ]),
+        _make_text_response("done"),
+    ]
+
+    with patch.object(engine._client, "stream_messages", side_effect=streams):
+        list(engine.submit("read"))
+
+    assert observed == [None, None]
+    assert engine._get_active_tool() is None
