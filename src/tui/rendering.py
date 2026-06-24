@@ -92,6 +92,14 @@ class SpinnerManager:
         self._live: Live | None = None
         self._spinner_text = "Thinking…"
 
+    @property
+    def current_text(self) -> str:
+        return self._spinner_text
+
+    @property
+    def is_running(self) -> bool:
+        return self._live is not None
+
     def start(self, text: str = "Thinking…"):
         self._spinner_text = text
         # Stop existing Live instance if running

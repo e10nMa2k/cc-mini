@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 import threading
 import time
 from dataclasses import asdict, dataclass
@@ -12,6 +13,7 @@ from core.context import build_skill_system_prompt
 from core.engine import AbortedError, Engine
 from core.permissions import PermissionChecker
 from core.tool import Tool
+from features.compact import auto_compact_threshold, estimate_tokens_conservative
 from features.skills import Skill
 
 if TYPE_CHECKING:
@@ -21,6 +23,7 @@ if TYPE_CHECKING:
 SkillStatus = Literal["completed", "failed", "timed_out", "aborted"]
 EngineFactory = Callable[..., Engine]
 TimerFactory = Callable[[float, Callable[[], None]], threading.Timer]
+CompactServiceFactory = Callable[[str], object]
 
 DEFAULT_SKILL_TIMEOUT_S = 600.0
 SUMMARY_MAX_CHARS = 4000
@@ -102,6 +105,7 @@ class SkillRunner:
         cost_tracker: CostTracker | None = None,
         timeout_s: float = DEFAULT_SKILL_TIMEOUT_S,
         timer_factory: TimerFactory = threading.Timer,
+        compact_service_factory: CompactServiceFactory | None = None,
     ) -> None:
         self._engine_factory = engine_factory
         self._caller_tools = list(caller_tools)
@@ -112,6 +116,7 @@ class SkillRunner:
         self._cost_tracker = cost_tracker
         self._timeout_s = timeout_s
         self._timer_factory = timer_factory
+        self._compact_service_factory = compact_service_factory
         self._state_lock = threading.Lock()
         self._active_engine: Engine | None = None
         self._cancel_reason: Literal["aborted", "timed_out"] | None = None
@@ -120,7 +125,12 @@ class SkillRunner:
         """Request cooperative cancellation of the active child Engine."""
         self._cancel("aborted")
 
-    def run(self, skill: Skill, arguments: str = "") -> SkillResult:
+    def run(
+        self,
+        skill: Skill,
+        arguments: str = "",
+        parent_snapshot: list[dict] | None = None,
+    ) -> SkillResult:
         started = time.monotonic()
         tool_uses = 0
         input_tokens = 0
@@ -144,12 +154,25 @@ class SkillRunner:
                 error=error,
             )
 
-        if skill.context != "fork":
+        if skill.context not in {"fork", "inline"}:
             return result("failed", f"Unsupported skill context: {skill.context}")
 
         prompt = skill.get_prompt(arguments)
         if not prompt.strip():
             return result("failed", "Expanded skill prompt is empty.")
+
+        prepared_messages: list[dict] = []
+        if skill.context == "inline":
+            if not self._valid_snapshot(parent_snapshot):
+                return result("failed", "Inline skill requires a valid parent message snapshot.")
+            prepared_messages = deepcopy(parent_snapshot)
+            prepared_messages, context_error = self._prepare_inline_context(
+                prepared_messages,
+                prompt,
+                skill.model or self._default_model,
+            )
+            if context_error is not None:
+                return result("failed", context_error)
 
         with self._state_lock:
             if self._active_engine is not None:
@@ -174,6 +197,9 @@ class SkillRunner:
                 session_store=None,
                 cost_tracker=self._cost_tracker,
             )
+
+            if skill.context == "inline":
+                child.set_messages(prepared_messages)
 
             with self._state_lock:
                 self._active_engine = child
@@ -216,6 +242,46 @@ class SkillRunner:
             with self._state_lock:
                 if self._active_engine is child:
                     self._active_engine = None
+
+    @staticmethod
+    def _valid_snapshot(snapshot: list[dict] | None) -> bool:
+        if not isinstance(snapshot, list) or not snapshot:
+            return False
+        return all(
+            isinstance(message, dict)
+            and message.get("role") in {"user", "assistant"}
+            and isinstance(message.get("content"), (str, list))
+            for message in snapshot
+        )
+
+    def _prepare_inline_context(
+        self,
+        messages: list[dict],
+        prompt: str,
+        model: str,
+    ) -> tuple[list[dict], str | None]:
+        candidate = messages + [{"role": "user", "content": prompt}]
+        threshold = auto_compact_threshold(model)
+        compact_trigger = threshold * 4 // 5
+        if estimate_tokens_conservative(candidate) < compact_trigger:
+            return messages, None
+
+        if self._compact_service_factory is None:
+            return [], "Inline skill context is near the model limit and no compaction service is available."
+
+        try:
+            service = self._compact_service_factory(model)
+            compacted, _ = service.compact(messages, "")
+        except Exception as exc:
+            return [], f"Inline skill context compaction failed: {exc}"
+
+        if not self._valid_snapshot(compacted):
+            return [], "Inline skill context compaction returned an invalid message snapshot."
+
+        compacted_candidate = compacted + [{"role": "user", "content": prompt}]
+        if estimate_tokens_conservative(compacted_candidate) > threshold:
+            return [], "Inline skill context remains above the model limit after compaction."
+        return deepcopy(compacted), None
 
     def _timeout(self) -> None:
         self._cancel("timed_out")

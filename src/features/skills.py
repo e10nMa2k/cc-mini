@@ -331,20 +331,26 @@ def discover_skills(cwd: str | None = None) -> list[Skill]:
 # System prompt section
 # ---------------------------------------------------------------------------
 
-def build_skills_prompt_section() -> str:
+def build_skills_prompt_section(skills: list[Skill] | tuple[Skill, ...] | None = None) -> str:
     """Build the skills listing for the system prompt.
 
-    Matches claude-code's ``SkillTool/prompt.ts`` — lists available skills
-    so the model knows what it can invoke via ``/skill-name``.
+    Only model-invocable skills authorized for the current Engine are exposed.
+    Manual slash command discovery continues to use ``list_skills()``.
     """
-    skills = list_skills(user_invocable_only=False)
-    if not skills:
+    candidates = list_model_invocable_skills() if skills is None else list(skills)
+    eligible = [skill for skill in candidates if is_model_invocable(skill)]
+    if not eligible:
         return ""
 
-    lines = ["# Available Skills", ""]
-    for s in skills:
+    lines = [
+        "# Model-Invocable Skills",
+        "",
+        "Use SkillTool to invoke one of the authorized skills below. Do not emit slash commands.",
+        "",
+    ]
+    for s in eligible:
         desc = s.description or "(no description)"
-        line = f"- /{s.name}: {desc}"
+        line = f"- {s.name}: {desc}"
         if s.when_to_use:
             line += f" — {s.when_to_use}"
         lines.append(line)

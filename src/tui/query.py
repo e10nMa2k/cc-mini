@@ -40,16 +40,37 @@ def run_query(engine: Engine, user_input: str | list, print_mode: bool,
 
     spinner = SpinnerManager(console)
     md_stream = StreamingMarkdown(console)
+    prompt_spinner_text: str | None = None
     first_text = True
     streaming = False
     # Track pending tool calls for spinner display.
     # key: unique tool key, value: (tool_name, display_line)
     pending_tools: dict[str, tuple[str, str]] = {}
 
+    def on_permission_prompt_start() -> None:
+        nonlocal prompt_spinner_text
+        if quiet:
+            return
+        prompt_spinner_text = spinner.current_text if spinner.is_running else None
+        spinner.stop()
+
+    def on_permission_prompt_end() -> None:
+        nonlocal prompt_spinner_text
+        if quiet:
+            return
+        if prompt_spinner_text is not None:
+            spinner.start(prompt_spinner_text)
+            prompt_spinner_text = None
+
     try:
         with listener:
             if not quiet:
                 spinner.start("Thinking…")
+                if permissions:
+                    permissions.set_prompt_callbacks(
+                        on_prompt_start=on_permission_prompt_start,
+                        on_prompt_end=on_permission_prompt_end,
+                    )
 
             for event in engine.submit(user_input):
                 if not quiet and streaming and listener.pressed:
@@ -166,6 +187,7 @@ def run_query(engine: Engine, user_input: str | list, print_mode: bool,
         spinner.stop()
         if permissions:
             permissions.set_esc_listener(None)
+            permissions.set_prompt_callbacks()
 
     if not print_mode:
         console.print()

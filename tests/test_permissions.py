@@ -27,6 +27,38 @@ def _mock_prompt_user(checker, response: str):
     return patch.object(checker, "_prompt_user", side_effect=fake_prompt)
 
 
+def test_prompt_callbacks_wrap_user_prompt():
+    checker = PermissionChecker()
+    events = []
+    checker.set_prompt_callbacks(
+        on_prompt_start=lambda: events.append("start"),
+        on_prompt_end=lambda: events.append("end"),
+    )
+
+    with _mock_prompt_user(checker, "y"):
+        result = checker.check(BashTool(), {"command": "echo hello"})
+
+    assert result == "allow"
+    assert events == ["start", "end"]
+
+
+def test_fork_preserves_prompt_callbacks_for_nested_tools():
+    checker = PermissionChecker()
+    events = []
+    checker.set_prompt_callbacks(
+        on_prompt_start=lambda: events.append("start"),
+        on_prompt_end=lambda: events.append("end"),
+    )
+
+    child = checker.fork()
+
+    with _mock_prompt_user(child, "y"):
+        result = child.check(BashTool(), {"command": "echo from child"})
+
+    assert result == "allow"
+    assert events == ["start", "end"]
+
+
 def test_bash_prompts_user_and_allows_on_y():
     checker = PermissionChecker()
     with _mock_prompt_user(checker, "y"):

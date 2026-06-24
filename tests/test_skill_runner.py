@@ -79,6 +79,10 @@ class FakeEngine:
         self.submit_error = submit_error
         self.submitted_prompt = None
         self.abort_calls = 0
+        self.messages = []
+
+    def set_messages(self, messages):
+        self.messages = messages
 
     def submit(self, prompt):
         self.submitted_prompt = prompt
@@ -134,6 +138,7 @@ def make_runner(
     timer_factory=None,
     cost_tracker=None,
     effort="high",
+    compact_service_factory=None,
 ):
     engine = engine or FakeEngine()
     factory = CapturingFactory(engine)
@@ -148,12 +153,19 @@ def make_runner(
         cost_tracker=cost_tracker,
         timeout_s=123,
         timer_factory=timer_factory,
+        compact_service_factory=compact_service_factory,
     )
     return runner, factory, timer_factory
 
 
 def fork_skill(**kwargs):
     defaults = {"name": "review", "context": "fork", "_prompt_text": "Run $ARGUMENTS"}
+    defaults.update(kwargs)
+    return Skill(**defaults)
+
+
+def inline_skill(**kwargs):
+    defaults = {"name": "review", "context": "inline", "_prompt_text": "Run $ARGUMENTS"}
     defaults.update(kwargs)
     return Skill(**defaults)
 
@@ -231,12 +243,136 @@ def test_empty_prompt_fails_without_creating_child():
     assert timers.timers == []
 
 
-@pytest.mark.parametrize("context", ["inline", "unknown"])
+@pytest.mark.parametrize("context", ["unknown", "detached"])
 def test_unsupported_context_fails_without_creating_child(context):
     runner, factory, _ = make_runner()
     result = runner.run(fork_skill(context=context))
     assert result.status == "failed"
     assert context in result.error
+    assert factory.calls == []
+
+
+def test_inline_context_requires_snapshot():
+    runner, factory, _ = make_runner()
+    result = runner.run(inline_skill())
+    assert result.status == "failed"
+    assert "snapshot" in result.error.lower()
+    assert factory.calls == []
+
+
+@pytest.mark.parametrize("content", [None, 42, {"type": "text", "text": "request"}])
+def test_inline_context_rejects_invalid_message_content(content):
+    runner, factory, _ = make_runner()
+    result = runner.run(
+        inline_skill(),
+        parent_snapshot=[{"role": "user", "content": content}],
+    )
+
+    assert result.status == "failed"
+    assert "snapshot" in result.error.lower()
+    assert factory.calls == []
+
+
+def test_inline_context_loads_defensive_copy_before_prompt():
+    engine = FakeEngine()
+    runner, _, _ = make_runner(engine)
+    snapshot = [{"role": "user", "content": [{"type": "text", "text": "request"}]}]
+
+    result = runner.run(inline_skill(), "checks", parent_snapshot=snapshot)
+
+    assert result.status == "completed"
+    assert engine.messages == snapshot
+    assert engine.messages is not snapshot
+    assert engine.messages[0]["content"] is not snapshot[0]["content"]
+    assert engine.submitted_prompt == "Run checks"
+
+    engine.messages[0]["content"][0]["text"] = "mutated"
+    assert snapshot[0]["content"][0]["text"] == "request"
+
+
+class FakeCompactService:
+    def __init__(self, output=None, error=None):
+        self.output = output
+        self.error = error
+        self.calls = []
+
+    def compact(self, messages, system_prompt):
+        self.calls.append((messages, system_prompt))
+        if self.error:
+            raise self.error
+        return self.output, "summary"
+
+
+def test_inline_context_below_trigger_skips_compaction():
+    compact_factory = MagicMock()
+    runner, _, _ = make_runner(compact_service_factory=compact_factory)
+    result = runner.run(
+        inline_skill(model="unknown-model"),
+        parent_snapshot=[{"role": "user", "content": "small"}],
+    )
+    assert result.status == "completed"
+    compact_factory.assert_not_called()
+
+
+def test_inline_context_compacts_at_trigger(monkeypatch):
+    service = FakeCompactService([{"role": "user", "content": "compacted"}])
+    runner, _, _ = make_runner(compact_service_factory=lambda model: service)
+    estimates = iter([80, 20])
+    monkeypatch.setattr("features.skill_runner.auto_compact_threshold", lambda model: 100)
+    monkeypatch.setattr(
+        "features.skill_runner.estimate_tokens_conservative",
+        lambda messages: next(estimates),
+    )
+
+    result = runner.run(
+        inline_skill(model="child-model"),
+        parent_snapshot=[{"role": "user", "content": "large"}],
+    )
+
+    assert result.status == "completed"
+    assert len(service.calls) == 1
+    assert service.calls[0][0] == [{"role": "user", "content": "large"}]
+
+
+@pytest.mark.parametrize(
+    ("service", "message"),
+    [
+        (FakeCompactService(error=RuntimeError("boom")), "compaction failed"),
+        (FakeCompactService([]), "invalid"),
+    ],
+)
+def test_inline_context_compaction_failure(monkeypatch, service, message):
+    runner, factory, _ = make_runner(compact_service_factory=lambda model: service)
+    monkeypatch.setattr("features.skill_runner.auto_compact_threshold", lambda model: 100)
+    monkeypatch.setattr("features.skill_runner.estimate_tokens_conservative", lambda messages: 80)
+
+    result = runner.run(
+        inline_skill(),
+        parent_snapshot=[{"role": "user", "content": "large"}],
+    )
+
+    assert result.status == "failed"
+    assert message in result.error.lower()
+    assert factory.calls == []
+
+
+def test_inline_context_rejects_still_oversized_compaction(monkeypatch):
+    service = FakeCompactService([{"role": "user", "content": "still large"}])
+    runner, factory, _ = make_runner(compact_service_factory=lambda model: service)
+    estimates = iter([80, 101])
+    monkeypatch.setattr("features.skill_runner.auto_compact_threshold", lambda model: 100)
+    monkeypatch.setattr(
+        "features.skill_runner.estimate_tokens_conservative",
+        lambda messages: next(estimates),
+    )
+
+    result = runner.run(
+        inline_skill(),
+        parent_snapshot=[{"role": "user", "content": "large"}],
+    )
+
+    assert result.status == "failed"
+    assert "above the model limit" in result.error
     assert factory.calls == []
 
 

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from copy import deepcopy
 import random
 import re
 import threading
@@ -82,6 +83,7 @@ class Engine:
         self._system_prompt = system_prompt
         self._permissions = permission_checker
         self._messages: list[dict] = []
+        self._pre_tool_use_boundary: int | None = None
         self._aborted = False
         self._turn_start_len: int | None = None
         self._active_stream = None  # reference to current HTTP stream
@@ -117,6 +119,24 @@ class Engine:
             }
             for message in messages
         ]
+        self._pre_tool_use_boundary = None
+
+    def get_pre_tool_use_snapshot(self) -> list[dict]:
+        """Return an isolated snapshot from before the current assistant response.
+
+        The boundary is captured immediately before a finalized assistant
+        response is appended.  Inline skills therefore see the current user
+        request but never the unanswered tool-use blocks that invoked them.
+        """
+        boundary = self._pre_tool_use_boundary
+        if boundary is None:
+            boundary = len(self._messages)
+        return deepcopy(self._messages[:boundary])
+
+    @property
+    def client(self) -> LLMClient:
+        """Return the configured provider client for composition services."""
+        return self._client
 
     def set_session_store(self, store: SessionStore | None) -> None:
         self._session_store = store
@@ -347,6 +367,7 @@ class Engine:
                     self._messages.pop()
                     return
 
+                self._pre_tool_use_boundary = len(self._messages)
                 self._messages.append({
                     "role": "assistant",
                     "content": final.content,

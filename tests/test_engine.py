@@ -88,6 +88,16 @@ def test_engine_returns_text_events():
     assert any("hello" in e[1] for e in text_events)
 
 
+def test_engine_exposes_configured_client_as_read_only_property():
+    configured_client = MagicMock()
+    with patch("core.engine.LLMClient", return_value=configured_client):
+        engine = _make_engine()
+
+    assert engine.client is configured_client
+    with pytest.raises(AttributeError):
+        engine.client = MagicMock()
+
+
 def test_engine_executes_tool_and_loops():
     engine = _make_engine()
     streams = _make_tool_then_text_response("Echo", {"message": "world"}, "tu_1", "done")
@@ -100,6 +110,63 @@ def test_engine_executes_tool_and_loops():
     _, tool_name, _, result = tool_result_events[0]
     assert tool_name == "Echo"
     assert "Echo: world" in result.content
+
+
+def test_pre_tool_use_snapshot_excludes_current_assistant_response():
+    observed = []
+
+    class SnapshotTool(EchoTool):
+        def execute(self, message: str) -> ToolResult:
+            observed.append(engine.get_pre_tool_use_snapshot())
+            assert engine.get_messages()[-1]["role"] == "assistant"
+            return super().execute(message)
+
+    engine = Engine(
+        tools=[SnapshotTool()],
+        system_prompt="test",
+        permission_checker=PermissionChecker(auto_approve=True),
+    )
+    streams = _make_tool_then_text_response("Echo", {"message": "hi"}, "tu_1", "done")
+
+    with patch.object(engine._client, "stream_messages", side_effect=streams):
+        list(engine.submit("current request"))
+
+    assert observed == [[{"role": "user", "content": "current request"}]]
+
+
+def test_pre_tool_use_snapshot_is_deep_copied_and_stable_for_same_response():
+    snapshots = []
+
+    class SnapshotTool(Tool):
+        name = "Snapshot"
+        description = "capture snapshot"
+        input_schema = {"type": "object", "properties": {}}
+
+        def execute(self) -> ToolResult:
+            snapshots.append(engine.get_pre_tool_use_snapshot())
+            return ToolResult(content="ok")
+
+    engine = _engine_with_tools([SnapshotTool()])
+    engine.set_messages([{
+        "role": "assistant",
+        "content": [{"type": "text", "text": "earlier"}],
+    }])
+    streams = [
+        _make_tools_response([
+            {"type": "tool_use", "id": "tu_1", "name": "Snapshot", "input": {}},
+            {"type": "tool_use", "id": "tu_2", "name": "Snapshot", "input": {}},
+        ]),
+        _make_text_response("done"),
+    ]
+
+    with patch.object(engine._client, "stream_messages", side_effect=streams):
+        list(engine.submit("request"))
+
+    assert snapshots[0] == snapshots[1]
+    assert snapshots[0] is not snapshots[1]
+    snapshots[0][0]["content"][0]["text"] = "mutated"
+    assert snapshots[1][0]["content"][0]["text"] == "earlier"
+    assert engine.get_messages()[0]["content"][0]["text"] == "earlier"
 
 
 def test_engine_denied_tool_returns_error_result():

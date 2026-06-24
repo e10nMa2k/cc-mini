@@ -295,9 +295,17 @@ class TestBundledSkills:
         for s in list_skills():
             assert s.source == "bundled"
 
-    def test_bundled_skills_remain_manual_only_by_default(self):
+    def test_bundled_model_invocation_reflects_risk(self):
         register_bundled_skills()
-        assert list_model_invocable_skills() == []
+        assert [skill.name for skill in list_model_invocable_skills()] == [
+            "review", "test",
+        ]
+        for name in ("review", "test"):
+            skill = get_skill(name)
+            assert skill.allowed_tools_declared is True
+            assert "Bash" in skill.allowed_tools
+        assert get_skill("commit") not in list_model_invocable_skills()
+        assert get_skill("simplify") not in list_model_invocable_skills()
 
 
 # -----------------------------------------------------------------------
@@ -406,22 +414,37 @@ class TestPromptSection:
         assert build_skills_prompt_section() == ""
 
     def test_lists_skills(self):
-        register_skill(Skill(name="deploy", description="Deploy app",
-                             when_to_use="After testing"))
+        register_skill(Skill(
+            name="deploy", description="Deploy app", when_to_use="After testing",
+            model_invocable=True, allowed_tools_declared=True,
+        ))
         section = build_skills_prompt_section()
-        assert "# Available Skills" in section
-        assert "/deploy: Deploy app" in section
+        assert "# Model-Invocable Skills" in section
+        assert "deploy: Deploy app" in section
         assert "— After testing" in section
+        assert "Use SkillTool" in section
+        assert "slash commands" in section
 
-    def test_prompt_still_lists_manual_and_model_invocable_skills(self):
+    def test_prompt_lists_only_model_invocable_skills(self):
         register_skill(Skill(name="manual", description="Manual"))
         register_skill(Skill(
             name="automatic", description="Automatic", model_invocable=True,
             allowed_tools_declared=True,
         ))
         section = build_skills_prompt_section()
-        assert "/manual: Manual" in section
-        assert "/automatic: Automatic" in section
+        assert "manual: Manual" not in section
+        assert "automatic: Automatic" in section
+
+    def test_explicit_authorized_skills_are_filtered(self):
+        first = Skill(
+            name="first", model_invocable=True, allowed_tools_declared=True,
+        )
+        second = Skill(
+            name="second", model_invocable=True, allowed_tools_declared=True,
+        )
+        section = build_skills_prompt_section((second,))
+        assert "second:" in section
+        assert "first:" not in section
 
 
 # -----------------------------------------------------------------------
@@ -500,3 +523,44 @@ class TestCommandParsing:
 
         assert handle_command("manual", "", ctx) is True
         run_query.assert_called_once()
+
+    @pytest.mark.parametrize("name", ["review", "test", "commit", "simplify"])
+    def test_all_bundled_skills_remain_manually_invocable(self, monkeypatch, name):
+        from commands import CommandContext, handle_command
+
+        register_bundled_skills()
+        run_query = MagicMock()
+        monkeypatch.setattr("tui.query.run_query", run_query)
+        ctx = CommandContext(
+            engine=MagicMock(),
+            session_store=None,
+            compact_service=MagicMock(),
+            console=MagicMock(),
+            app_config=MagicMock(),
+        )
+
+        assert handle_command(name, "focus", ctx) is True
+        assert "focus" in run_query.call_args.args[1]
+
+    def test_manual_fork_skill_still_restores_parent_messages(self, monkeypatch):
+        from commands import CommandContext, handle_command
+
+        register_skill(Skill(
+            name="forked", context="fork", _prompt_text="run forked",
+        ))
+        run_query = MagicMock()
+        monkeypatch.setattr("tui.query.run_query", run_query)
+        engine = MagicMock()
+        saved = [{"role": "user", "content": "parent"}]
+        engine.get_messages.return_value = saved
+        ctx = CommandContext(
+            engine=engine,
+            session_store=None,
+            compact_service=MagicMock(),
+            console=MagicMock(),
+            app_config=MagicMock(),
+        )
+
+        assert handle_command("forked", "", ctx) is True
+        assert engine.set_messages.call_args_list[0].args[0] == []
+        assert engine.set_messages.call_args_list[-1].args[0] == saved

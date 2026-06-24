@@ -2,7 +2,7 @@ from __future__ import annotations
 import os
 import sys
 import select
-from typing import Literal, TYPE_CHECKING
+from typing import Callable, Literal, TYPE_CHECKING
 from .tool import Tool
 
 if TYPE_CHECKING:
@@ -33,6 +33,8 @@ class PermissionChecker:
         self._always_allow: set[str] = set()
         self._esc_listener: EscListener | None = None
         self._sandbox = sandbox_manager
+        self._on_prompt_start: Callable[[], None] | None = None
+        self._on_prompt_end: Callable[[], None] | None = None
         self._plan_manager: PlanModeManager | None = None
         # Permission mode tracking (matches toolPermissionContext.mode in TS)
         self._mode: str = "default"  # 'default' | 'plan'
@@ -57,6 +59,21 @@ class PermissionChecker:
     def set_esc_listener(self, listener: EscListener | None):
         self._esc_listener = listener
 
+    def set_prompt_callbacks(
+        self,
+        *,
+        on_prompt_start: Callable[[], None] | None = None,
+        on_prompt_end: Callable[[], None] | None = None,
+    ) -> None:
+        """Notify the UI around blocking permission prompts.
+
+        SkillTool runs nested child engines, so a child prompt may appear while
+        the parent TUI spinner is active. These callbacks let the UI suspend
+        transient rendering before the prompt writes directly to the terminal.
+        """
+        self._on_prompt_start = on_prompt_start
+        self._on_prompt_end = on_prompt_end
+
     def fork(self) -> PermissionChecker:
         """Copy the effective permission policy without sharing mutable state."""
         child = PermissionChecker(
@@ -65,6 +82,8 @@ class PermissionChecker:
         )
         child._always_allow = set(self._always_allow)
         child._esc_listener = self._esc_listener
+        child._on_prompt_start = self._on_prompt_start
+        child._on_prompt_end = self._on_prompt_end
         child._mode = self._mode
         child._pre_plan_mode = self._pre_plan_mode
         child._pre_plan_always_allow = (
@@ -127,7 +146,16 @@ class PermissionChecker:
         ):
             return "allow"
 
-        return self._prompt_user(tool, inputs)
+        return self._prompt_user_with_callbacks(tool, inputs)
+
+    def _prompt_user_with_callbacks(self, tool: Tool, inputs: dict) -> PermissionBehavior:
+        if self._on_prompt_start:
+            self._on_prompt_start()
+        try:
+            return self._prompt_user(tool, inputs)
+        finally:
+            if self._on_prompt_end:
+                self._on_prompt_end()
 
     def _check_plan(self, tool: Tool, inputs: dict) -> PermissionBehavior:
         """Plan mode: read-only tools + plan file writes + agent tools."""

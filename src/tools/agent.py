@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from typing import Iterable
 
 from core.tool import Tool, ToolResult
 from features.agents import BUILTIN_AGENT_DEFINITIONS
@@ -69,39 +70,59 @@ def _build_agent_description() -> str:
 class AgentTool(Tool):
     name = "Agent"
     description = _build_agent_description()
-    input_schema = {
-        "type": "object",
-        "properties": {
-            "description": {"type": "string", "description": "Short (3-5 word) label for the agent task"},
-            "prompt": {"type": "string", "description": "Self-contained instructions for the agent"},
-            "subagent_type": {
-                "type": "string",
-                "enum": ["worker", "Explore"],
-                "default": "worker",
-                "description": "Agent type to use. 'worker' for general-purpose tasks; 'Explore' for fast read-only codebase exploration.",
-            },
-        },
-        "required": ["description", "prompt"],
-    }
 
     def get_activity_description(self, **kwargs) -> str | None:
         desc = kwargs.get("description", "")
         return f"Running agent: {desc}" if desc else "Running agent…"
 
-    def __init__(self, manager: WorkerManager):
+    def __init__(
+        self,
+        manager: WorkerManager,
+        grantable_skill_names: Iterable[str] = (),
+    ):
         self._manager = manager
+        self._grantable_skill_names = tuple(dict.fromkeys(grantable_skill_names))
+        self._input_schema = {
+            "type": "object",
+            "properties": {
+                "description": {"type": "string", "description": "Short (3-5 word) label for the agent task"},
+                "prompt": {"type": "string", "description": "Self-contained instructions for the agent"},
+                "subagent_type": {
+                    "type": "string",
+                    "enum": ["worker", "Explore"],
+                    "default": "worker",
+                    "description": "Agent type to use. 'worker' for general-purpose tasks; 'Explore' for fast read-only codebase exploration.",
+                },
+                "allowed_skills": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": list(self._grantable_skill_names),
+                    },
+                    "default": [],
+                    "description": "Fixed model-invocable skill grant for a general worker",
+                },
+            },
+            "required": ["description", "prompt"],
+        }
+
+    @property
+    def input_schema(self) -> dict:
+        return self._input_schema
 
     def execute(
         self,
         description: str,
         prompt: str,
         subagent_type: str = "worker",
+        allowed_skills: list[str] | None = None,
     ) -> ToolResult:
         try:
             payload = self._manager.spawn(
                 description=description,
                 prompt=prompt,
                 subagent_type=subagent_type,
+                allowed_skills=allowed_skills or [],
             )
         except ValueError as exc:
             return ToolResult(content=f"Error: {exc}", is_error=True)

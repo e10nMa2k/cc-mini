@@ -2,6 +2,7 @@ from features.coordinator import (
     current_session_mode,
     get_coordinator_system_prompt,
     get_coordinator_user_context,
+    get_worker_system_prompt,
     is_coordinator_mode,
     match_session_mode,
 )
@@ -44,3 +45,19 @@ def test_coordinator_system_prompt_mentions_task_notifications():
     assert "task-notification" in prompt
     assert "Agent" in prompt
     assert "SendMessage" in prompt
+
+
+def test_coordinator_prompt_lists_assign_only_skills():
+    prompt = get_coordinator_system_prompt(("review", "test"))
+    assert "review, test" in prompt
+    assert "allowed_skills" in prompt
+    assert "cannot invoke these skills yourself" in prompt
+    assert "Explore" in prompt
+
+
+def test_worker_prompt_lists_exact_immutable_authorization():
+    prompt = get_worker_system_prompt(("review",))
+    assert "review" in prompt
+    assert "SkillTool" in prompt
+    assert "cannot change" in prompt
+    assert "test" not in prompt

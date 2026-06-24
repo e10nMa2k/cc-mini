@@ -44,11 +44,15 @@ def _context_window_for_model(model: str) -> int:
     return _DEFAULT_CONTEXT_WINDOW
 
 
-def _auto_compact_threshold(model: str) -> int:
+def auto_compact_threshold(model: str) -> int:
     """context_window - max_output_reserve - buffer (matches official)."""
     cw = _context_window_for_model(model)
     max_out_reserve = min(20_000, cw // 5)  # reserve for summary output
     return cw - max_out_reserve - AUTOCOMPACT_BUFFER_TOKENS
+
+
+# Backward-compatible private name for existing internal callers/tests.
+_auto_compact_threshold = auto_compact_threshold
 
 COMPACT_PROMPT = """\
 Please provide a detailed summary of our conversation so far.  This summary \
@@ -115,6 +119,21 @@ def estimate_tokens(messages: list[dict]) -> int:
     return total_chars // CHARS_PER_TOKEN
 
 
+def estimate_tokens_conservative(messages: list[dict]) -> int:
+    """Estimate tokens using the larger of two lightweight approximations.
+
+    Non-ASCII text often consumes more tokens than the repository's standard
+    four-characters-per-token estimate.  Count each non-ASCII character as one
+    token and apply the four-character estimate only to ASCII text.
+    """
+    texts = [_text_of(msg.get("content", "")) for msg in messages]
+    ascii_chars = sum(sum(ord(char) < 128 for char in text) for text in texts)
+    non_ascii_chars = sum(sum(ord(char) >= 128 for char in text) for text in texts)
+    mixed_estimate = (ascii_chars + CHARS_PER_TOKEN - 1) // CHARS_PER_TOKEN
+    mixed_estimate += non_ascii_chars
+    return max(estimate_tokens(messages), mixed_estimate)
+
+
 def should_compact(messages: list[dict], model: str | None = None,
                    last_input_tokens: int | None = None) -> bool:
     """Return True when the conversation should be auto-compacted.
@@ -124,7 +143,7 @@ def should_compact(messages: list[dict], model: str | None = None,
     Otherwise fall back to the character-based estimate.
     """
     if last_input_tokens and model:
-        return last_input_tokens >= _auto_compact_threshold(model)
+        return last_input_tokens >= auto_compact_threshold(model)
     return estimate_tokens(messages) > COMPACT_THRESHOLD_TOKENS
 
 

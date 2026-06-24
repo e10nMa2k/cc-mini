@@ -13,7 +13,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from queue import Empty, Queue
-from typing import Callable
+from typing import Callable, Iterable
 from xml.sax.saxutils import escape
 
 from core.engine import AbortedError
@@ -39,14 +39,15 @@ class WorkerTask:
     # Live progress tracking
     tool_use_count: int = 0
     current_activity: str = ""
+    allowed_skills: tuple[str, ...] = ()
 
 
 class WorkerManager:
     """Manages a pool of background worker engines, dispatched by subagent_type.
 
     Args:
-        engine_factories: maps subagent_type string to a zero-arg callable that
-            returns a fresh Engine instance. E.g.::
+        engine_factories: maps subagent_type string to a callable accepting an
+            immutable skill allowlist and returning a fresh Engine. E.g.::
 
                 WorkerManager({
                     "worker":  _build_worker_engine,
@@ -54,8 +55,14 @@ class WorkerManager:
                 })
     """
 
-    def __init__(self, engine_factories: dict[str, Callable[[], object]]):
+    def __init__(
+        self,
+        engine_factories: dict[str, Callable[[tuple[str, ...]], object]],
+        grantable_skill_names: Iterable[str] = (),
+    ):
         self._engine_factories = engine_factories
+        self._grantable_skill_names = tuple(dict.fromkeys(grantable_skill_names))
+        self._grantable_skill_set = frozenset(self._grantable_skill_names)
         self._tasks: dict[str, WorkerTask] = {}
         self._lock = threading.Lock()
         self._notifications: Queue[str] = Queue()
@@ -66,6 +73,7 @@ class WorkerManager:
         description: str,
         prompt: str,
         subagent_type: str = "worker",
+        allowed_skills: list[str] | tuple[str, ...] | None = None,
     ) -> dict[str, str]:
         factory = self._engine_factories.get(subagent_type)
         if factory is None:
@@ -75,10 +83,16 @@ class WorkerManager:
                 f"Available types: {known}"
             )
 
+        normalized_skills = self._validate_skill_grant(
+            subagent_type,
+            allowed_skills or (),
+        )
+
         task = WorkerTask(
             task_id=f"agent-{uuid.uuid4().hex[:8]}",
             description=description.strip() or "Worker task",
-            engine=factory(),
+            engine=factory(normalized_skills),
+            allowed_skills=normalized_skills,
         )
         with self._lock:
             self._tasks[task.task_id] = task
@@ -88,6 +102,36 @@ class WorkerManager:
             "status": "started",
             "description": task.description,
         }
+
+    def _validate_skill_grant(
+        self,
+        subagent_type: str,
+        requested: list[str] | tuple[str, ...],
+    ) -> tuple[str, ...]:
+        if not isinstance(requested, (list, tuple)) or any(
+            not isinstance(name, str) for name in requested
+        ):
+            raise ValueError("allowed_skills must be a list of skill names.")
+        normalized = tuple(dict.fromkeys(requested))
+        if normalized and subagent_type != "worker":
+            raise ValueError(
+                f"Agent type {subagent_type!r} cannot receive skill authorization."
+            )
+        from features.skills import get_skill, is_model_invocable
+
+        invalid = []
+        for name in normalized:
+            skill = get_skill(name)
+            if (
+                name not in self._grantable_skill_set
+                or skill is None
+                or not is_model_invocable(skill)
+            ):
+                invalid.append(name)
+        if invalid:
+            rendered = ", ".join(invalid)
+            raise ValueError(f"Invalid or non-invocable skill grant: {rendered}")
+        return normalized
 
     def continue_task(self, *, task_id: str, message: str) -> dict[str, str]:
         task = self._get_task(task_id)
