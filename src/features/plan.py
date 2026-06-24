@@ -66,7 +66,7 @@ class PlanModeManager:
     def __init__(self) -> None:
         self._engine: Engine | None = None
         self._permissions: PermissionChecker | None = None
-        self._build_explore_engine: Callable[[], object] | None = None
+        self._build_explore_engine: Callable[[tuple[str, ...]], object] | None = None
         self._plan_worker_manager: object | None = None
         self._active: bool = False
         self._plan_file: Path | None = None
@@ -76,7 +76,7 @@ class PlanModeManager:
     def bind_engine(
         self,
         engine: Engine,
-        build_explore_engine: Callable[[], object] | None = None,
+        build_explore_engine: Callable[[tuple[str, ...]], object] | None = None,
     ) -> None:
         self._engine = engine
         self._build_explore_engine = build_explore_engine

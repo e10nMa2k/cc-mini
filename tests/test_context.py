@@ -1,6 +1,11 @@
 from unittest.mock import patch, MagicMock
 import subprocess
-from core.context import build_system_prompt, _get_git_section, _get_claude_md_section
+from core.context import (
+    _get_claude_md_section,
+    _get_git_section,
+    build_skill_system_prompt,
+    build_system_prompt,
+)
 
 
 def test_build_system_prompt_contains_base_instructions():
@@ -105,3 +110,36 @@ def test_get_claude_md_section_truncates_large_file(tmp_path):
     result = _get_claude_md_section(str(tmp_path))
     # Section includes header, so content is truncated to fit within 10k chars
     assert len(result) <= 10_100  # Allow some margin for the header
+
+
+def test_build_skill_system_prompt_is_lean_and_explicit(tmp_path):
+    (tmp_path / "CLAUDE.md").write_text("# Project Rules\nUse focused tests.")
+
+    prompt = build_skill_system_prompt(
+        cwd=str(tmp_path),
+        model="test-model",
+        tool_names=["Read", "Bash"],
+    )
+
+    assert "authorized security testing" in prompt
+    assert "software engineering tasks" in prompt
+    assert "# Executing actions with care" in prompt
+    assert "# Output efficiency" in prompt
+    assert f"Primary working directory: {tmp_path}" in prompt
+    assert "# Project Rules" in prompt
+    assert "# Skill Execution" in prompt
+    assert "# Tool behavior" in prompt
+    assert "If a tool call is denied" in prompt
+    assert "<system-reminder>" in prompt
+    assert "prompt injection" in prompt
+    assert "Available tools: Read, Bash" in prompt
+    assert "Return a concise final result" in prompt
+
+    assert "# Git Status" not in prompt
+    assert "# Auto Memory" not in prompt
+    assert "# Companion" not in prompt
+    assert "# Available Skills" not in prompt
+    assert "<task-notification>" not in prompt
+    assert "Plan mode is active" not in prompt
+    assert "advisor_20260301" not in prompt
+    assert "automatically compress prior messages" not in prompt

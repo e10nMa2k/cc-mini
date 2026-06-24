@@ -1,6 +1,8 @@
 from __future__ import annotations
+from copy import deepcopy
 import random
 import re
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import TYPE_CHECKING, Any, Iterator
@@ -81,9 +83,12 @@ class Engine:
         self._system_prompt = system_prompt
         self._permissions = permission_checker
         self._messages: list[dict] = []
+        self._pre_tool_use_boundary: int | None = None
         self._aborted = False
         self._turn_start_len: int | None = None
         self._active_stream = None  # reference to current HTTP stream
+        self._active_tool: Tool | None = None
+        self._active_tool_lock = threading.Lock()
         self._session_store = session_store
         self._cost_tracker = cost_tracker
         self._advisor_model = advisor_model or "claude-opus-4-6"
@@ -114,6 +119,24 @@ class Engine:
             }
             for message in messages
         ]
+        self._pre_tool_use_boundary = None
+
+    def get_pre_tool_use_snapshot(self) -> list[dict]:
+        """Return an isolated snapshot from before the current assistant response.
+
+        The boundary is captured immediately before a finalized assistant
+        response is appended.  Inline skills therefore see the current user
+        request but never the unanswered tool-use blocks that invoked them.
+        """
+        boundary = self._pre_tool_use_boundary
+        if boundary is None:
+            boundary = len(self._messages)
+        return deepcopy(self._messages[:boundary])
+
+    @property
+    def client(self) -> LLMClient:
+        """Return the configured provider client for composition services."""
+        return self._client
 
     def set_session_store(self, store: SessionStore | None) -> None:
         self._session_store = store
@@ -179,6 +202,29 @@ class Engine:
                 self._active_stream.close()
             except Exception:
                 pass
+
+        active_tool = self._get_active_tool()
+        if active_tool is not None:
+            try:
+                active_tool.abort()
+            except Exception:
+                pass
+
+    def _register_active_tool(self, tool: Tool) -> None:
+        """Register the one sequential tool currently executing."""
+        with self._active_tool_lock:
+            self._active_tool = tool
+
+    def _get_active_tool(self) -> Tool | None:
+        """Return the active sequential tool without holding the lock afterward."""
+        with self._active_tool_lock:
+            return self._active_tool
+
+    def _clear_active_tool(self, tool: Tool) -> None:
+        """Clear *tool* if it is still the registered active tool."""
+        with self._active_tool_lock:
+            if self._active_tool is tool:
+                self._active_tool = None
 
     def cancel_turn(self):
         """Roll back messages to the state before the current turn started.
@@ -321,6 +367,7 @@ class Engine:
                     self._messages.pop()
                     return
 
+                self._pre_tool_use_boundary = len(self._messages)
                 self._messages.append({
                     "role": "assistant",
                     "content": final.content,
@@ -415,7 +462,16 @@ class Engine:
                                 result = ToolResult(content="Permission denied.", is_error=True)
                             else:
                                 yield ("tool_executing", tn, ti, act)
-                                result = self._execute_tool(tu, skip_permission=True)
+                                if tool is None:
+                                    result = self._execute_tool(tu, skip_permission=True)
+                                else:
+                                    self._register_active_tool(tool)
+                                    try:
+                                        if self._aborted:
+                                            raise AbortedError()
+                                        result = self._execute_tool(tu, skip_permission=True)
+                                    finally:
+                                        self._clear_active_tool(tool)
 
                             yield ("tool_result", tn, ti, result)
                             tool_results.append({

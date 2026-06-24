@@ -57,7 +57,23 @@ def get_coordinator_user_context(worker_tools: Iterable[str]) -> dict[str, str]:
     }
 
 
-def get_coordinator_system_prompt() -> str:
+def get_coordinator_system_prompt(grantable_skill_names: Iterable[str] = ()) -> str:
+    names = tuple(dict.fromkeys(grantable_skill_names))
+    skill_section = ""
+    if names:
+        rendered = ", ".join(names)
+        skill_section = f"""
+
+## Worker Skill Authorization
+
+You may assign these model-invocable skills to a general Worker through the
+Agent tool's `allowed_skills` field: {rendered}.
+
+You cannot invoke these skills yourself. Skill assignments are fixed when the
+Worker is created, cannot be expanded with SendMessage, and are not available
+to Explore agents.
+"""
+
     return """You are Claude Code, an AI assistant that orchestrates software engineering tasks across multiple workers.
 
 ## 1. Your Role
@@ -283,10 +299,21 @@ User:
 
 You:
   Fix for the null pointer is in progress. Still waiting to hear back about the test suite.
+""" + skill_section
+
+
+def get_worker_system_prompt(allowed_skill_names: Iterable[str] = ()) -> str:
+    names = tuple(dict.fromkeys(allowed_skill_names))
+    skill_section = ""
+    if names:
+        rendered = ", ".join(names)
+        skill_section = f"""
+
+Your fixed skill authorization is: {rendered}.
+Invoke only these skills through SkillTool. This authorization cannot change
+during your lifetime, including after SendMessage continuations.
 """
 
-
-def get_worker_system_prompt() -> str:
     return """You are a worker operating under a coordinator.
 
 - Execute the assigned task directly and autonomously.
@@ -296,4 +323,4 @@ def get_worker_system_prompt() -> str:
 - If you modify code, run relevant verification before finishing.
 - Report concrete file paths, commands, results, and any residual risk.
 - Do not try to spawn other workers.
-"""
+""" + skill_section

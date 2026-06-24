@@ -1,4 +1,8 @@
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
 from core.llm import (
+    LLMClient,
     _to_openai_messages,
     _tool_schema_to_openai,
     default_companion_model,
@@ -86,3 +90,28 @@ def test_openai_reasoning_effort_support():
 
 def test_default_companion_model_uses_main_model_for_openai():
     assert default_companion_model("openai", "gpt-4.1-mini") == "gpt-4.1-mini"
+
+
+def test_anthropic_requests_omit_openai_effort_parameter():
+    client = object.__new__(LLMClient)
+    client.provider = "anthropic"
+    client._client = MagicMock()
+    client._client.messages.create.return_value = SimpleNamespace(
+        content=[], usage=None, stop_reason="end_turn",
+    )
+
+    client.create_message(
+        model="claude-sonnet-4",
+        max_tokens=128,
+        messages=[],
+        effort="high",
+    )
+    client.stream_messages(
+        model="claude-sonnet-4",
+        max_tokens=128,
+        messages=[],
+        effort="high",
+    )
+
+    assert "effort" not in client._client.messages.create.call_args.kwargs
+    assert "effort" not in client._client.messages.stream.call_args.kwargs

@@ -2,6 +2,9 @@
 
 Skills are one-command workflows. Type `/name` and the AI runs a full sequence of steps.
 
+Eligible skills can also be invoked by the model through `SkillTool`. Manual
+slash invocation remains available and follows the existing inline/fork behavior.
+
 ## Built-in Skills
 
 | Command | What it does |
@@ -100,6 +103,23 @@ name: deploy
 description: Deploy to staging
 context: fork          # fork = isolated, inline = in conversation (default)
 allowed-tools: Bash, Read
+model-invocable: true  # opt in to SkillTool; false by default
 arguments: target
 ---
 ```
+
+`model-invocable: true` is effective only when `allowed-tools` is explicitly
+declared, including an explicit empty list. The child agent always receives
+`Read`, `Glob`, and `Grep` when those tools exist on the caller, plus the
+declared tools. Meta tools such as Agent, plan, todo, and SkillTool are never
+forwarded.
+
+`context: fork` starts with no parent conversation. `context: inline` receives
+a deep-copied parent snapshot ending immediately before the assistant response
+that called SkillTool. Large inline snapshots may be compacted in the child;
+the parent conversation is never modified.
+
+Skill tool access does not bypass normal permission prompts or sandbox rules.
+The Coordinator and Explore agents cannot invoke skills directly, and Plan
+Mode removes SkillTool. A Coordinator may grant an immutable skill allowlist
+to a general Worker when creating it.

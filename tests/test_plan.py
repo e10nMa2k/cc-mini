@@ -4,6 +4,22 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from features.plan import PlanModeManager, _get_plans_dir
+from core.tool import Tool, ToolResult
+
+
+class _NamedTool(Tool):
+    description = "test"
+    input_schema = {"type": "object", "properties": {}}
+
+    def __init__(self, name):
+        self._name = name
+
+    @property
+    def name(self):
+        return self._name
+
+    def execute(self):
+        return ToolResult(content="ok")
 
 
 class TestPlanDir:
@@ -68,3 +84,21 @@ class TestPlanModeManager:
 
         assert not manager.is_active
         assert "Exited plan mode" in msg or "approved" in msg.lower()
+
+    def test_plan_mode_omits_skill_tool_and_restores_same_instance(self, tmp_path):
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        skill_tool = _NamedTool("SkillTool")
+        engine = self._make_engine_mock()
+        engine._tools = {"SkillTool": skill_tool, "Read": _NamedTool("Read")}
+        manager = PlanModeManager()
+        manager.bind_engine(engine)
+
+        with patch.object(Path, "home", return_value=fake_home):
+            manager.enter()
+            plan_tools = engine.set_tools.call_args_list[0].args[0]
+            manager.exit()
+            restored_tools = engine.set_tools.call_args_list[-1].args[0]
+
+        assert all(tool.name != "SkillTool" for tool in plan_tools)
+        assert skill_tool in restored_tools

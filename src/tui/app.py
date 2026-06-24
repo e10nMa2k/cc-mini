@@ -12,7 +12,7 @@ from pathlib import Path
 from prompt_toolkit.history import FileHistory
 from rich.console import Console
 
-from core.config import load_app_config
+from core.config import AppConfig, load_app_config
 from core.context import build_system_prompt
 from core.engine import AbortedError, Engine
 from tools import AskUserQuestionTool
@@ -53,19 +53,113 @@ from features.memory import (
     record_consolidation,
     read_last_consolidated_at,
 )
-from features.skills import discover_skills, list_skills, build_skills_prompt_section
+from features.skill_runner import SkillRunner
+from features.skills import (
+    Skill,
+    build_skills_prompt_section,
+    discover_skills,
+    list_model_invocable_skills,
+)
 from features.skills_bundled import register_bundled_skills
 from commands import parse_command, handle_command, CommandContext
 from tui.prompt import bordered_prompt, slash_completer
 from tui.query import run_query
 from tui.input_parser import parse_input
 from tui.shell import run_shell, handle_sandbox_command
+from tools.skill import SkillTool
 
 console = Console()
 _HISTORY_FILE = Path.home() / ".config" / "cc-mini" / "history"
 
 # Match claude-code-main: useDoublePress DOUBLE_PRESS_TIMEOUT_MS = 800
 _DOUBLE_PRESS_TIMEOUT_MS = 0.8
+
+
+def _install_skill_tool(
+    engine: Engine,
+    *,
+    base_tools: list,
+    authorized_skills: tuple[Skill, ...],
+    permissions: PermissionChecker,
+    app_config: AppConfig,
+    cwd: str,
+    cost_tracker: CostTracker | None,
+    mode_allows_execution,
+) -> None:
+    """Install the final tool set for an already constructed Engine."""
+    final_tools = list(base_tools)
+    if authorized_skills:
+        def _build_child_engine(**kwargs) -> Engine:
+            return Engine(
+                provider=app_config.provider,
+                api_key=app_config.api_key,
+                base_url=app_config.base_url,
+                **kwargs,
+            )
+
+        runner = SkillRunner(
+            engine_factory=_build_child_engine,
+            caller_tools=base_tools,
+            permission_checker=permissions,
+            cwd=cwd,
+            default_model=app_config.model,
+            effort=app_config.effort,
+            cost_tracker=cost_tracker,
+            compact_service_factory=lambda model: CompactService(
+                client=engine.client,
+                model=model,
+                effort=app_config.effort,
+            ),
+        )
+        final_tools.append(SkillTool(
+            runner=runner,
+            authorized_skill_names=tuple(skill.name for skill in authorized_skills),
+            snapshot_provider=engine.get_pre_tool_use_snapshot,
+            mode_allows_execution=mode_allows_execution,
+        ))
+    engine.set_tools(final_tools)
+
+
+def _build_bound_engine(
+    *,
+    base_tools: list,
+    system_prompt: str,
+    permissions: PermissionChecker,
+    app_config: AppConfig,
+    cwd: str,
+    authorized_skills: tuple[Skill, ...] = (),
+    session_store: SessionStore | None = None,
+    cost_tracker: CostTracker | None = None,
+    mode_allows_execution=lambda: True,
+    advisor_enabled: bool = False,
+) -> Engine:
+    """Construct an Engine and bind its complete model-visible tool set."""
+    engine = Engine(
+        tools=base_tools,
+        system_prompt=system_prompt,
+        permission_checker=permissions,
+        provider=app_config.provider,
+        api_key=app_config.api_key,
+        base_url=app_config.base_url,
+        model=app_config.model,
+        max_tokens=app_config.max_tokens,
+        effort=app_config.effort,
+        session_store=session_store,
+        cost_tracker=cost_tracker,
+        advisor_model=app_config.advisor_model if advisor_enabled else None,
+        advisor_max_uses=app_config.advisor_max_uses if advisor_enabled else None,
+    )
+    _install_skill_tool(
+        engine,
+        base_tools=base_tools,
+        authorized_skills=authorized_skills,
+        permissions=permissions,
+        app_config=app_config,
+        cwd=cwd,
+        cost_tracker=cost_tracker,
+        mode_allows_execution=mode_allows_execution,
+    )
+    return engine
 
 
 def _run_dream(engine: Engine, memory_dir: Path,
@@ -158,7 +252,7 @@ def main() -> None:
     register_bundled_skills()
     cwd = str(Path.cwd())
     discover_skills(cwd)
-    skills_section = build_skills_prompt_section()
+    model_skills = tuple(list_model_invocable_skills())
 
     if args.coordinator:
         set_coordinator_mode(True)
@@ -174,14 +268,18 @@ def main() -> None:
 
     def _build_system_prompt_for_mode(coordinator_enabled: bool) -> str:
         prompt = build_system_prompt(cwd=cwd, model=app_config.model, memory_dir=memory_dir)
-        if skills_section:
-            prompt += "\n\n" + skills_section
+        if not coordinator_enabled:
+            skills_section = build_skills_prompt_section(model_skills)
+            if skills_section:
+                prompt += "\n\n" + skills_section
         if coordinator_enabled:
             extra = get_coordinator_user_context(worker_tool_names)
             worker_context = extra.get("workerToolsContext")
             if worker_context:
                 prompt += "\n\n# Coordinator Context\n" + worker_context
-            prompt += "\n\n" + get_coordinator_system_prompt()
+            prompt += "\n\n" + get_coordinator_system_prompt(
+                skill.name for skill in model_skills
+            )
         return prompt
 
     permissions = PermissionChecker(
@@ -189,29 +287,32 @@ def main() -> None:
         sandbox_manager=sandbox_mgr,
     )
 
-    def _build_worker_engine() -> Engine:
+    def _build_worker_engine(allowed_skills: tuple[str, ...]) -> Engine:
         worker_permissions = PermissionChecker(
             auto_approve=True,
             sandbox_manager=sandbox_mgr,
         )
+        skills_by_name = {skill.name: skill for skill in model_skills}
+        authorized = tuple(skills_by_name[name] for name in allowed_skills)
         worker_prompt = build_system_prompt(cwd=cwd, model=app_config.model, memory_dir=memory_dir)
+        skills_section = build_skills_prompt_section(authorized)
         if skills_section:
             worker_prompt += "\n\n" + skills_section
-        worker_prompt += "\n\n" + get_worker_system_prompt()
-        return Engine(
-            tools=_build_base_tools(),
+        worker_prompt += "\n\n" + get_worker_system_prompt(allowed_skills)
+        return _build_bound_engine(
+            base_tools=_build_base_tools(),
             system_prompt=worker_prompt,
-            permission_checker=worker_permissions,
-            provider=app_config.provider,
-            api_key=app_config.api_key,
-            base_url=app_config.base_url,
-            model=app_config.model,
-            max_tokens=app_config.max_tokens,
-            effort=app_config.effort,
+            permissions=worker_permissions,
+            app_config=app_config,
+            cwd=cwd,
+            authorized_skills=authorized,
+            cost_tracker=cost_tracker,
         )
 
-    def _build_explore_engine() -> Engine:
+    def _build_explore_engine(allowed_skills: tuple[str, ...] = ()) -> Engine:
         """Build a read-only Explore agent engine — lean, no project context by design."""
+        if allowed_skills:
+            raise ValueError("Explore agents cannot receive skill authorization.")
         explore_permissions = PermissionChecker(
             auto_approve=True,
             sandbox_manager=sandbox_mgr,
@@ -231,7 +332,7 @@ def main() -> None:
     worker_manager = WorkerManager({
         "worker": _build_worker_engine,
         "Explore": _build_explore_engine,
-    })
+    }, grantable_skill_names=(skill.name for skill in model_skills))
 
     # Plan mode manager
     from features.plan import PlanModeManager
@@ -249,7 +350,10 @@ def main() -> None:
         ])
         if coordinator_enabled:
             tools.extend([
-                AgentTool(worker_manager),
+                AgentTool(
+                    worker_manager,
+                    grantable_skill_names=(skill.name for skill in model_skills),
+                ),
                 SendMessageTool(worker_manager),
                 TaskStopTool(worker_manager),
             ])
@@ -268,26 +372,24 @@ def main() -> None:
             mode=current_session_mode(),
         )
 
-    engine = Engine(
-        tools=_build_tools_for_mode(coordinator_enabled),
+    base_tools = _build_tools_for_mode(coordinator_enabled)
+    engine = _build_bound_engine(
+        base_tools=base_tools,
         system_prompt=_build_system_prompt_for_mode(coordinator_enabled),
-        permission_checker=permissions,
-        provider=app_config.provider,
-        api_key=app_config.api_key,
-        base_url=app_config.base_url,
-        model=app_config.model,
-        max_tokens=app_config.max_tokens,
-        effort=app_config.effort,
+        permissions=permissions,
+        app_config=app_config,
+        cwd=cwd,
+        authorized_skills=() if coordinator_enabled else model_skills,
         session_store=session_store,
         cost_tracker=cost_tracker,
-        advisor_model=app_config.advisor_model,
-        advisor_max_uses=app_config.advisor_max_uses,
+        mode_allows_execution=lambda: not plan_manager.is_active,
+        advisor_enabled=True,
     )
     plan_manager.bind_engine(engine, build_explore_engine=_build_explore_engine)
     plan_manager.set_permissions(permissions)
     permissions.set_plan_manager(plan_manager)
     compact_service = CompactService(
-        client=engine._client,
+        client=engine.client,
         model=app_config.model,
         effort=app_config.effort,
     )
@@ -295,7 +397,17 @@ def main() -> None:
     def _apply_session_mode(session_mode: str | None) -> str | None:
         warning = match_session_mode(session_mode)
         enabled = is_coordinator_mode()
-        engine.set_tools(_build_tools_for_mode(enabled))
+        mode_tools = _build_tools_for_mode(enabled)
+        _install_skill_tool(
+            engine,
+            base_tools=mode_tools,
+            authorized_skills=() if enabled else model_skills,
+            permissions=permissions,
+            app_config=app_config,
+            cwd=cwd,
+            cost_tracker=cost_tracker,
+            mode_allows_execution=lambda: not plan_manager.is_active,
+        )
         engine.system_prompt = _build_system_prompt_for_mode(enabled)
         if session_store is not None:
             session_store.mode = current_session_mode()
@@ -550,7 +662,7 @@ def main() -> None:
                 from buddy.commands import handle_buddy_command
                 handle_buddy_command(
                     cmd_args,
-                    engine._client,
+                    engine.client,
                     console,
                     app_config.buddy_model or app_config.model,
                 )
@@ -627,7 +739,7 @@ def main() -> None:
                         _set_reaction(text, print_to_terminal=True)
                         reply_event.set()
                     fire_companion_observer(
-                        '', comp, engine._client, _direct_reply,
+                        '', comp, engine.client, _direct_reply,
                         model=app_config.buddy_model or app_config.model,
                         user_msg=user_input,
                     )
@@ -685,7 +797,7 @@ def main() -> None:
                             except Exception:
                                 pass
                             fire_companion_observer(
-                                assistant_text, comp, engine._client, _set_reaction,
+                                assistant_text, comp, engine.client, _set_reaction,
                                 model=app_config.buddy_model or app_config.model,
                                 user_msg=user_input,
                             )
